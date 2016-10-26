@@ -3503,10 +3503,10 @@ namespace libtorrent
 			const char* ptr = recv_buffer.begin;
 			int packet_size = detail::read_int32(ptr);
 
-			// don't accept packets larger than 1 MB
-			if (packet_size > 1024*1024 || packet_size < 0)
+			// don't accept packets with negative size
+			if (packet_size < 0)
 			{
-				// packet too large
+				// negative packet size
 				received_bytes(0, bytes_transferred);
 				disconnect(errors::packet_too_large, op_bittorrent, 2);
 				return;
