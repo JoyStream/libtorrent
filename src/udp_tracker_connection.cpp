@@ -112,13 +112,12 @@ namespace libtorrent
 #if defined TORRENT_ASIO_DEBUGGING
 			add_outstanding_async("udp_tracker_connection::name_lookup");
 #endif
-			// when stopping, pass in the prefer cache flag, because we
+			// when stopping, pass in the cache-only flag, because we
 			// don't want to get stuck on DNS lookups when shutting down
-			// if we can avoid it
 			m_man.host_resolver().async_resolve(hostname
 				, tracker_req().event == tracker_request::stopped
-					? resolver_interface::prefer_cache
-					: resolver_interface::abort_on_shutdown
+					? resolver_interface::cache_only : 0
+					| resolver_interface::abort_on_shutdown
 				, boost::bind(&udp_tracker_connection::name_lookup
 					, shared_from_this(), _1, _2, port));
 
@@ -598,8 +597,15 @@ namespace libtorrent
 		resp.min_interval = 60;
 		resp.incomplete = detail::read_int32(buf);
 		resp.complete = detail::read_int32(buf);
-		int num_peers = (size - 20) / 6;
-		if ((size - 20) % 6 != 0)
+
+		std::size_t const ip_stride =
+#if TORRENT_USE_IPV6
+			m_target.address().is_v6() ? 18 :
+#endif
+			6;
+
+		int const num_peers = (size - 20) / ip_stride;
+		if ((size - 20) % ip_stride != 0)
 		{
 			fail(error_code(errors::invalid_tracker_response_length));
 			return false;
@@ -619,15 +625,31 @@ namespace libtorrent
 			return true;
 		}
 
-		std::vector<peer_entry> peer_list;
-		resp.peers4.reserve(num_peers);
-		for (int i = 0; i < num_peers; ++i)
+#if TORRENT_USE_IPV6
+		if (m_target.address().is_v6())
 		{
-			ipv4_peer_entry e;
-			memcpy(&e.ip[0], buf, 4);
-			buf += 4;
-			e.port = detail::read_uint16(buf);
-			resp.peers4.push_back(e);
+			resp.peers6.reserve(std::size_t(num_peers));
+			for (int i = 0; i < num_peers; ++i)
+			{
+				ipv6_peer_entry e;
+				std::memcpy(&e.ip[0], buf, 16);
+				buf += 16;
+				e.port = detail::read_uint16(buf);
+				resp.peers6.push_back(e);
+			}
+		}
+		else
+#endif
+		{
+			resp.peers4.reserve(std::size_t(num_peers));
+			for (int i = 0; i < num_peers; ++i)
+			{
+				ipv4_peer_entry e;
+				memcpy(&e.ip[0], buf, 4);
+				buf += 4;
+				e.port = detail::read_uint16(buf);
+				resp.peers4.push_back(e);
+			}
 		}
 
 		std::list<address> ip_list;

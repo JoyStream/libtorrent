@@ -179,10 +179,10 @@ namespace libtorrent
 		}
 
 		if (branch_len >= m_name.size()
-			&& std::memcmp(branch_path, m_name.c_str(), m_name.size()) == 0)
+			&& std::memcmp(branch_path, m_name.c_str(), m_name.size()) == 0
+			&& branch_path[m_name.size()] == TORRENT_SEPARATOR)
 		{
-			// the +1 is to skip the trailing '/' (or '\')
-			int offset = m_name.size()
+			int const offset = m_name.size()
 				+ (m_name.size() == branch_len?0:1);
 			branch_path += offset;
 			branch_len -= offset;
@@ -850,7 +850,7 @@ namespace libtorrent
 		if (index >= int(m_file_hashes.size())) return sha1_hash(0);
 		return sha1_hash(m_file_hashes[index]);
 	}
-	
+
 	std::string const& file_storage::symlink(internal_file_entry const& fe) const
 	{
 		TORRENT_ASSERT_PRECOND(fe.symlink_index < int(m_symlinks.size()));
@@ -1041,11 +1041,13 @@ namespace libtorrent
 				++i;
 
 				// tail-padding is enabled, and the offset after this file is not
-				// aligned and it's not the last file. The last file must be padded
-				// too, in order to match an equivalent tail-padded file.
+				// aligned. The last file must be padded too, in order to match an
+				// equivalent tail-padded file.
 				add_pad_file(alignment - (off % alignment), i, off, padding_file);
 
 				TORRENT_ASSERT((off % alignment) == 0);
+
+				if (i == m_files.end()) break;
 			}
 		}
 		m_total_size = off;
@@ -1056,8 +1058,8 @@ namespace libtorrent
 		, boost::int64_t& offset
 		, int& pad_file_counter)
 	{
-		int cur_index = i - m_files.begin();
-		int index = m_files.size();
+		int const cur_index = i - m_files.begin();
+		int const index = m_files.size();
 		m_files.push_back(internal_file_entry());
 		++m_num_files;
 		internal_file_entry& e = m_files.back();
@@ -1080,7 +1082,7 @@ namespace libtorrent
 		if (!m_file_base.empty()) m_file_base.resize(index + 1, 0);
 #endif
 
-		reorder_file(index, cur_index);
+		if (index != cur_index) reorder_file(index, cur_index);
 	}
 
 	void file_storage::unload()

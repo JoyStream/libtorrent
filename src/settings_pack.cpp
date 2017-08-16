@@ -56,6 +56,11 @@ namespace {
 		if (i != c.end() && i->first == v.first) i->second = v.second;
 		else c.insert(i, v);
 	}
+
+	// return the string, unless it's null, in which case the empty string is
+	// returned
+	char const* ensure_string(char const* str)
+	{ return str == NULL ? "" : str; }
 }
 
 namespace libtorrent
@@ -121,6 +126,12 @@ namespace libtorrent
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #endif
 
+#ifdef TORRENT_WINDOWS
+#define CLOSE_FILE_INTERVAL 120
+#else
+#define CLOSE_FILE_INTERVAL 0
+#endif
+
 	namespace {
 
 	using aux::session_impl;
@@ -137,7 +148,7 @@ namespace libtorrent
 		SET_NOPREV(proxy_username, "", &session_impl::update_proxy),
 		SET_NOPREV(proxy_password, "", &session_impl::update_proxy),
 		SET_NOPREV(i2p_hostname, "", &session_impl::update_i2p_bridge),
-		SET_NOPREV(peer_fingerprint, "-LT1110-", &session_impl::update_peer_fingerprint),
+		SET_NOPREV(peer_fingerprint, "-LT1140-", &session_impl::update_peer_fingerprint),
 		SET_NOPREV(dht_bootstrap_nodes, "dht.libtorrent.org:25401", &session_impl::update_dht_bootstrap_nodes)
 	};
 
@@ -152,7 +163,7 @@ namespace libtorrent
 		SET(use_parole_mode, true, 0),
 		SET(use_read_cache, true, 0),
 		DEPRECATED_SET(use_write_cache, true, 0),
-		SET(dont_flush_write_cache, false, 0),
+		DEPRECATED_SET(dont_flush_write_cache, false, 0),
 		DEPRECATED_SET(explicit_read_cache, false, 0),
 		SET(coalesce_reads, false, 0),
 		SET(coalesce_writes, false, 0),
@@ -257,7 +268,7 @@ namespace libtorrent
 		SET(disk_io_read_mode, settings_pack::enable_os_cache, 0),
 		SET(outgoing_port, 0, 0),
 		SET(num_outgoing_ports, 0, 0),
-		SET(peer_tos, 0, &session_impl::update_peer_tos),
+		SET(peer_tos, 0x20, &session_impl::update_peer_tos),
 		SET(active_downloads, 3, &session_impl::trigger_auto_manage),
 		SET(active_seeds, 5, &session_impl::trigger_auto_manage),
 		SET_NOPREV(active_checking, 1, &session_impl::trigger_auto_manage),
@@ -265,7 +276,7 @@ namespace libtorrent
 		SET(active_tracker_limit, 1600, 0),
 		SET(active_lsd_limit, 60, 0),
 		SET(active_limit, 15, &session_impl::trigger_auto_manage),
-		SET_NOPREV(active_loaded_limit, 100, &session_impl::trigger_auto_manage),
+		SET_NOPREV(active_loaded_limit, 0, &session_impl::trigger_auto_manage),
 		SET(auto_manage_interval, 30, 0),
 		SET(seed_time_limit, 24 * 60 * 60, 0),
 		SET(auto_scrape_interval, 1800, 0),
@@ -278,7 +289,7 @@ namespace libtorrent
 		SET(max_rejects, 50, 0),
 		SET(recv_socket_buffer_size, 0, &session_impl::update_socket_buffer_size),
 		SET(send_socket_buffer_size, 0, &session_impl::update_socket_buffer_size),
-		SET(file_checks_delay_per_block, 0, 0),
+		DEPRECATED_SET(file_checks_delay_per_block, 0, 0),
 		SET(read_cache_line_size, 32, 0),
 		SET(write_cache_line_size, 16, 0),
 		SET(optimistic_disk_retry, 10 * 60, 0),
@@ -342,7 +353,10 @@ namespace libtorrent
 		SET_NOPREV(proxy_type, settings_pack::none, &session_impl::update_proxy),
 		SET_NOPREV(proxy_port, 0, &session_impl::update_proxy),
 		SET_NOPREV(i2p_port, 0, &session_impl::update_i2p_bridge),
-		SET_NOPREV(cache_size_volatile, 256, 0)
+		SET_NOPREV(cache_size_volatile, 256, 0),
+		SET_NOPREV(urlseed_max_request_bytes, 16 * 1024 * 1024, 0),
+		SET_NOPREV(web_seed_name_lookup_retry, 1800, 0),
+		SET_NOPREV(close_file_interval, CLOSE_FILE_INTERVAL, &session_impl::update_close_file_interval),
 	};
 
 #undef SET
@@ -440,8 +454,7 @@ namespace libtorrent
 		// loop over all settings that differ from default
 		for (int i = 0; i < settings_pack::num_string_settings; ++i)
 		{
-			char const* cmp = str_settings[i].default_value == 0 ? "" : str_settings[i].default_value;
-			if (cmp == s.m_strings[i]) continue;
+			if (ensure_string(str_settings[i].default_value) == s.m_strings[i]) continue;
 			sett[str_settings[i].name] = s.m_strings[i];
 		}
 
@@ -462,10 +475,10 @@ namespace libtorrent
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
 
-	boost::shared_ptr<settings_pack> load_pack_from_struct(
+	settings_pack load_pack_from_struct(
 		aux::session_settings const& current, session_settings const& s)
 	{
-		boost::shared_ptr<settings_pack> p = boost::make_shared<settings_pack>();
+		settings_pack p;
 
 		for (int i = 0; i < settings_pack::num_string_settings; ++i)
 		{
@@ -473,7 +486,7 @@ namespace libtorrent
 			std::string& val = *(std::string*)(((char*)&s) + str_settings[i].offset);
 			int setting_name = settings_pack::string_type_base + i;
 			if (val == current.get_str(setting_name)) continue;
-			p->set_str(setting_name, val);
+			p.set_str(setting_name, val);
 		}
 
 		for (int i = 0; i < settings_pack::num_int_settings; ++i)
@@ -482,7 +495,7 @@ namespace libtorrent
 			int& val = *(int*)(((char*)&s) + int_settings[i].offset);
 			int setting_name = settings_pack::int_type_base + i;
 			if (val == current.get_int(setting_name)) continue;
-			p->set_int(setting_name, val);
+			p.set_int(setting_name, val);
 		}
 
 		for (int i = 0; i < settings_pack::num_bool_settings; ++i)
@@ -491,25 +504,25 @@ namespace libtorrent
 			bool& val = *(bool*)(((char*)&s) + bool_settings[i].offset);
 			int setting_name = settings_pack::bool_type_base + i;
 			if (val == current.get_bool(setting_name)) continue;
-			p->set_bool(setting_name, val);
+			p.set_bool(setting_name, val);
 		}
 
 		// special case for deprecated float values
 		int val = current.get_int(settings_pack::share_ratio_limit);
 		if (fabs(s.share_ratio_limit - float(val) / 100.f) > 0.001f)
-			p->set_int(settings_pack::share_ratio_limit, s.share_ratio_limit * 100);
+			p.set_int(settings_pack::share_ratio_limit, s.share_ratio_limit * 100);
 
 		val = current.get_int(settings_pack::seed_time_ratio_limit);
 		if (fabs(s.seed_time_ratio_limit - float(val) / 100.f) > 0.001f)
-			p->set_int(settings_pack::seed_time_ratio_limit, s.seed_time_ratio_limit * 100);
+			p.set_int(settings_pack::seed_time_ratio_limit, s.seed_time_ratio_limit * 100);
 
 		val = current.get_int(settings_pack::peer_turnover);
 		if (fabs(s.peer_turnover - float(val) / 100.f) > 0.001)
-			p->set_int(settings_pack::peer_turnover, s.peer_turnover * 100);
+			p.set_int(settings_pack::peer_turnover, s.peer_turnover * 100);
 
 		val = current.get_int(settings_pack::peer_turnover_cutoff);
 		if (fabs(s.peer_turnover_cutoff - float(val) / 100.f) > 0.001)
-			p->set_int(settings_pack::peer_turnover_cutoff, s.peer_turnover_cutoff * 100);
+			p.set_int(settings_pack::peer_turnover_cutoff, s.peer_turnover_cutoff * 100);
 
 		return p;
 	}
@@ -552,7 +565,7 @@ namespace libtorrent
 	{
 		for (int i = 0; i < settings_pack::num_string_settings; ++i)
 		{
-			if (str_settings[i].default_value == 0) continue;
+			if (str_settings[i].default_value == NULL) continue;
 			s.set_str(settings_pack::string_type_base + i, str_settings[i].default_value);
 			TORRENT_ASSERT(s.get_str(settings_pack::string_type_base + i) == str_settings[i].default_value);
 		}
@@ -568,16 +581,28 @@ namespace libtorrent
 			s.set_bool(settings_pack::bool_type_base + i, bool_settings[i].default_value);
 			TORRENT_ASSERT(s.get_bool(settings_pack::bool_type_base + i) == bool_settings[i].default_value);
 		}
+	}
 
-		// this seems questionable...
-/*
-		// Some settings have dynamic defaults depending on the machine
-		// for instance, the disk cache size
+	settings_pack default_settings()
+	{
+		settings_pack ret;
+		// TODO: it would be nice to reserve() these vectors up front
+		for (int i = 0; i < settings_pack::num_string_settings; ++i)
+		{
+			if (str_settings[i].default_value == NULL) continue;
+			ret.set_str(settings_pack::string_type_base + i, str_settings[i].default_value);
+		}
 
-		// by default, set the cahe size to an 8:th of the total amount of physical RAM
-		boost::uint64_t phys_ram = total_physical_ram();
-		if (phys_ram > 0) s.set_int(settings_pack::cache_size, phys_ram / 16 / 1024 / 8);
-*/
+		for (int i = 0; i < settings_pack::num_int_settings; ++i)
+		{
+			ret.set_int(settings_pack::int_type_base + i, int_settings[i].default_value);
+		}
+
+		for (int i = 0; i < settings_pack::num_bool_settings; ++i)
+		{
+			ret.set_bool(settings_pack::bool_type_base + i, bool_settings[i].default_value);
+		}
+		return ret;
 	}
 
 	void apply_pack(settings_pack const* pack, aux::session_settings& sett
@@ -786,7 +811,7 @@ namespace libtorrent
 		std::pair<boost::uint16_t, bool> v(name, false);
 		std::vector<std::pair<boost::uint16_t, bool> >::const_iterator i
 			= std::lower_bound(m_bools.begin(), m_bools.end(), v
-					, &compare_first<bool>);
+				, &compare_first<bool>);
 		if (i != m_bools.end() && i->first == name) return i->second;
 		return false;
 	}
@@ -796,6 +821,40 @@ namespace libtorrent
 		m_strings.clear();
 		m_ints.clear();
 		m_bools.clear();
+	}
+
+	void settings_pack::clear(int const name)
+	{
+		switch (name & type_mask)
+		{
+			case string_type_base:
+			{
+				std::pair<boost::uint16_t, std::string> v(name, std::string());
+				std::vector<std::pair<boost::uint16_t, std::string> >::iterator i
+					= std::lower_bound(m_strings.begin(), m_strings.end(), v
+						, &compare_first<std::string>);
+				if (i != m_strings.end() && i->first == name) m_strings.erase(i);
+				break;
+			}
+			case int_type_base:
+			{
+				std::pair<boost::uint16_t, int> v(name, 0);
+				std::vector<std::pair<boost::uint16_t, int> >::iterator i
+					= std::lower_bound(m_ints.begin(), m_ints.end(), v
+						, &compare_first<int>);
+				if (i != m_ints.end() && i->first == name) m_ints.erase(i);
+				break;
+			}
+			case bool_type_base:
+			{
+				std::pair<boost::uint16_t, bool> v(name, false);
+				std::vector<std::pair<boost::uint16_t, bool> >::iterator i
+					= std::lower_bound(m_bools.begin(), m_bools.end(), v
+					, &compare_first<bool>);
+				if (i != m_bools.end() && i->first == name) m_bools.erase(i);
+				break;
+			}
+		}
 	}
 }
 

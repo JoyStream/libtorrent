@@ -33,6 +33,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "test.hpp"
 #include "setup_transfer.hpp"
 #include "test_utils.hpp"
+#include "settings.hpp"
 
 #include "libtorrent/storage.hpp"
 #include "libtorrent/file_pool.hpp"
@@ -116,11 +117,8 @@ void run_until(io_service& ios, bool const& done)
 
 void nop() {}
 
-boost::shared_ptr<default_storage> setup_torrent(file_storage& fs
-	, file_pool& fp
-	, std::vector<char>& buf
-	, std::string const& test_path
-	, aux::session_settings& set)
+boost::shared_ptr<torrent_info> setup_torrent_info(file_storage& fs
+	, std::vector<char>& buf)
 {
 	fs.add_file(combine_path("temp_storage", "test1.tmp"), 8);
 	fs.add_file(combine_path("temp_storage", combine_path("folder1", "test2.tmp")), 8);
@@ -144,6 +142,17 @@ boost::shared_ptr<default_storage> setup_torrent(file_storage& fs
 		fprintf(stderr, "torrent_info constructor failed: %s\n"
 			, ec.message().c_str());
 	}
+
+	return info;
+}
+
+boost::shared_ptr<default_storage> setup_torrent(file_storage& fs
+	, file_pool& fp
+	, std::vector<char>& buf
+	, std::string const& test_path
+	, aux::session_settings& set)
+{
+	boost::shared_ptr<torrent_info> info = setup_torrent_info(fs, buf);
 
 	storage_params p;
 	p.files = &fs;
@@ -731,6 +740,64 @@ bool got_file_rename_alert(alert const* a)
 		|| alert_cast<libtorrent::file_rename_failed_alert>(a);
 }
 
+TORRENT_TEST(rename_file)
+{
+	std::vector<char> buf;
+	file_storage fs;
+	boost::shared_ptr<torrent_info> info = setup_torrent_info(fs, buf);
+
+	const int mask = alert::all_categories
+		& ~(alert::performance_warning
+			| alert::stats_notification);
+
+	settings_pack pack = settings();
+	pack.set_int(settings_pack::alert_mask, mask);
+	pack.set_bool(settings_pack::disable_hash_checks, true);
+	lt::session ses(pack);
+
+	add_torrent_params p;
+	p.ti = info;
+	p.save_path = ".";
+	error_code ec;
+	torrent_handle h = ses.add_torrent(p, ec);
+
+	// make it a seed
+	std::vector<char> tmp(info->piece_length());
+	for (int i = 0; i < info->num_pieces(); ++i)
+		h.add_piece(i, &tmp[0]);
+
+	// wait for the files to have been written
+	alert const* pf = wait_for_alert(ses, piece_finished_alert::alert_type, "ses", info->num_pieces());
+	TEST_CHECK(pf);
+
+	// now rename them. This is the test
+	for (int i = 0; i < info->num_files(); ++i)
+	{
+		std::string name = fs.file_path(i);
+		h.rename_file(i, "temp_storage__" + name.substr(12));
+	}
+
+	// wait fir the files to have been renamed
+	alert const* fra = wait_for_alert(ses, file_renamed_alert::alert_type, "ses", info->num_files());
+	TEST_CHECK(fra);
+
+	TEST_CHECK(exists(info->name() + "__"));
+
+	h.save_resume_data();
+	alert const* ra = wait_for_alert(ses, save_resume_data_alert::alert_type);
+	TEST_CHECK(ra);
+	if (!ra) return;
+	entry resume = *alert_cast<save_resume_data_alert>(ra)->resume_data;
+
+	std::cerr << resume.to_string() << "\n";
+
+	entry::list_type files = resume.dict().find("mapped_files")->second.list();
+	for (entry::list_type::iterator i = files.begin(); i != files.end(); ++i)
+	{
+		TEST_EQUAL(i->string().substr(0, 14), "temp_storage__");
+	}
+}
+
 TORRENT_TEST(rename_file_fastresume)
 {
 	std::string test_path = current_working_directory();
@@ -1261,6 +1328,37 @@ void delete_dirs(std::string path)
 			, path.c_str(), ec.message().c_str());
 	}
 	TEST_CHECK(!exists(path));
+}
+
+TORRENT_TEST(move_storage_to_self)
+{
+	// call move_storage with the path to the exising storage. should be a no-op
+	std::string const save_path = current_working_directory();
+	std::string const test_path = combine_path(save_path, "temp_storage");
+	delete_dirs(test_path);
+
+	aux::session_settings set;
+	file_storage fs;
+	std::vector<char> buf;
+	file_pool fp;
+	io_service ios;
+	disk_buffer_pool dp(16 * 1024, ios, boost::bind(&nop));
+	boost::shared_ptr<default_storage> s = setup_torrent(fs, fp, buf, save_path, set);
+
+	file::iovec_t const b = {&buf[0], 4};
+	storage_error se;
+	s->writev(&b, 1, 2, 0, 0, se);
+
+	TEST_CHECK(exists(combine_path(test_path, combine_path("folder2", "test3.tmp"))));
+	TEST_CHECK(exists(combine_path(test_path, combine_path("_folder3", "test4.tmp"))));
+
+	s->move_storage(save_path, 0, se);
+	TEST_EQUAL(se.ec, boost::system::errc::success);
+
+	TEST_CHECK(exists(test_path));
+
+	TEST_CHECK(exists(combine_path(test_path, combine_path("folder2", "test3.tmp"))));
+	TEST_CHECK(exists(combine_path(test_path, combine_path("_folder3", "test4.tmp"))));
 }
 
 TORRENT_TEST(move_storage_into_self)

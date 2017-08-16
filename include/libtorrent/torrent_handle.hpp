@@ -41,6 +41,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <set>
 
 #include <boost/shared_ptr.hpp>
+#include <boost/make_shared.hpp>
 #include <boost/function.hpp>
 #include <boost/weak_ptr.hpp>
 #include <boost/cstdint.hpp>
@@ -81,6 +82,9 @@ namespace libtorrent
 #ifndef BOOST_NO_EXCEPTIONS
 	void throw_invalid_handle() TORRENT_NO_RETURN;
 #endif
+
+	using boost::shared_ptr;
+	using boost::make_shared;
 
 	// holds the state of a block in a piece. Who we requested
 	// it from and how far along we are at downloading it.
@@ -184,6 +188,7 @@ namespace libtorrent
 		//	get_download_queue() is called, it will be invalidated.
 		block_info* blocks;
 
+#ifndef TORRENT_NO_DEPRECATE
 		// the speed classes. These may be used by the piece picker to
 		// coalesce requests of similar download rates
 		enum state_t { none, slow, medium, fast };
@@ -200,7 +205,12 @@ namespace libtorrent
 		// downloaded pieces down. Pieces set to ``none`` can be converted into
 		// any of ``fast``, ``medium`` or ``slow`` as soon as a peer want to
 		// download from it.
-		state_t piece_state;
+		state_t TORRENT_DEPRECATED_MEMBER piece_state;
+#else
+		// hidden
+		enum deprecated_state_t { none, slow, medium, fast };
+		deprecated_state_t deprecated_piece_state;
+#endif
 	};
 
 	// for boost::hash (and to support using this type in unordered_map etc.)
@@ -365,14 +375,14 @@ namespace libtorrent
 		// deadline (and flags) of a piece can be changed by calling this
 		// function again.
 		// 
-		// The ``flags`` parameter can be used to ask libtorrent to send an alert
+		// The ``flags`` parameter can be used to ask libtorrent to post an alert
 		// once the piece has been downloaded, by passing alert_when_available.
 		// When set, the read_piece_alert alert will be delivered, with the piece
 		// data, when it's downloaded.
 		// 
 		// If the piece is already downloaded when this call is made, nothing
 		// happens, unless the alert_when_available flag is set, in which case it
-		// will do the same thing as calling read_piece() for ``index``.
+		// will have the same effect as calling read_piece() for ``index``.
 		// 
 		// ``deadline`` is the number of milliseconds until this piece should be
 		// completed.
@@ -404,7 +414,7 @@ namespace libtorrent
 		// priority, but the priority is used as a weight.
 		// 
 		// Peers whose Torrent has a higher priority will take precedence when
-		// distributing unchoke slots. This is a strict prioritization where
+		// distributing unchoke slots. This is a strict prioritisation where
 		// every interested peer on a high priority torrent will be unchoked
 		// before any other, lower priority, torrents have any peers unchoked.
 		void set_priority(int prio) const;
@@ -490,7 +500,7 @@ namespace libtorrent
 		// pieces from it, unless it's paused, queued, checking or seeding.
 		// ``remove_url_seed()`` removes the given url if it exists already.
 		// ``url_seeds()`` return a set of the url seeds currently in this
-		// torrent. Note that urls that fails may be removed automatically from
+		// torrent. Note that URLs that fails may be removed automatically from
 		// the list.
 		// 
 		// See http-seeding_ for more information.
@@ -558,7 +568,7 @@ namespace libtorrent
 		// .. note::
 		// 	Torrents that are auto-managed may be automatically resumed again. It
 		// 	does not make sense to pause an auto-managed torrent without making it
-		// 	not automanaged first. Torrents are auto-managed by default when added
+		// 	not auto-managed first. Torrents are auto-managed by default when added
 		// 	to the session. For more information, see queuing_.
 		// 
 		void pause(int flags = 0) const;
@@ -832,6 +842,11 @@ namespace libtorrent
 		void queue_position_top() const;
 		void queue_position_bottom() const;
 
+		// updates the position in the queue for this torrent. The relative order
+		// of all other torrents remain intact but their numerical queue position
+		// shifts to make space for this torrent's new position
+		void queue_position_set(int p) const;
+
 #ifndef TORRENT_NO_DEPRECATE
 		// deprecated in 1.1
 
@@ -871,7 +886,7 @@ namespace libtorrent
 		// 
 		// Note that when a torrent first starts up, and it needs a certificate,
 		// it will suspend connecting to any peers until it has one. It's
-		// typically desirable to resume the torrent after setting the ssl
+		// typically desirable to resume the torrent after setting the SSL
 		// certificate.
 		// 
 		// If you receive a torrent_need_cert_alert, you need to call this to
@@ -896,7 +911,7 @@ namespace libtorrent
 		// without metadata only if it was started without a .torrent file, e.g.
 		// by using the libtorrent extension of just supplying a tracker and
 		// info-hash.
-		boost::shared_ptr<const torrent_info> torrent_file() const;
+		shared_ptr<const torrent_info> torrent_file() const;
 
 #ifndef TORRENT_NO_DEPRECATE
 
@@ -972,8 +987,6 @@ namespace libtorrent
 		// will return the resume data in an alert
 		TORRENT_DEPRECATED
 		entry write_resume_data() const;
-		// ================ end deprecation ============
-#endif
 
 		// ``use_interface()`` sets the network interface this torrent will use
 		// when it opens outgoing connections. By default, it uses the same
@@ -982,7 +995,10 @@ namespace libtorrent
 		// IPv4 or IPv6 address). When specifying multiple interfaces, the
 		// torrent will round-robin which interface to use for each outgoing
 		// connection. This is useful for clients that are multi-homed.
+		TORRENT_DEPRECATED
 		void use_interface(const char* net_interface) const;
+		// ================ end deprecation ============
+#endif
 
 		// Fills the specified ``std::vector<int>`` with the availability for
 		// each piece in this torrent. libtorrent does not keep track of
@@ -1000,8 +1016,10 @@ namespace libtorrent
 		// You may however change the priority of individual pieces. There are 8
 		// priority levels. 0 means not to download the piece at all. Otherwise,
 		// lower priority values means less likely to be picked. Piece priority
-		// takes precedence over piece availability. Every priority-7 piece will
-		// be attempted to be picked before a priority 6 piece and so on.
+		// takes precedence over piece availability. Every piece with priority 7
+		// will be attempted to be picked before a priority 6 piece and so on.
+		// 
+		// The default priority of pieces is 4.
 		// 
 		// Piece priorities can not be changed for torrents that have not
 		// downloaded the metadata yet. For instance, magnet links and torrents
@@ -1107,6 +1125,8 @@ namespace libtorrent
 		// 
 		// ``upload_limit`` and ``download_limit`` will return the current limit
 		// setting, for upload and download, respectively.
+		// 
+		// Local peers are not rate limited by default. see peer-classes_.
 		void set_upload_limit(int limit) const;
 		int upload_limit() const;
 		void set_download_limit(int limit) const;
@@ -1120,7 +1140,7 @@ namespace libtorrent
 		// Magnet links, and other torrents that start out without having
 		// metadata are pinned automatically. This is to give the client a chance
 		// to get the metadata and save it before it's unloaded. In this case, it
-		// may be useful to un-pin the torrent once its metadata has been saved
+		// may be useful to unpin the torrent once its metadata has been saved
 		// to disk.
 		// 
 		// For more information about dynamically loading and unloading torrents,
@@ -1144,7 +1164,7 @@ namespace libtorrent
 		// can be done by using this other than an unnecessary connection attempt
 		// is made. If the torrent is uninitialized or in queued or checking
 		// mode, this will throw libtorrent_exception. The second (optional)
-		// argument will be bitwised ORed into the source mask of this peer.
+		// argument will be bitwise ORed into the source mask of this peer.
 		// Typically this is one of the source flags in peer_info. i.e.
 		// ``tracker``, ``pex``, ``dht`` etc.
 		//
@@ -1158,7 +1178,7 @@ namespace libtorrent
 		// 0x04 supports uTP. If this is not set, the peer will only be contacted
 		//      over TCP.
 		// 
-		// 0x08 supports holepunching protocol. If this
+		// 0x08 supports hole punching protocol. If this
 		//      flag is received from a peer, it can be
 		//      used as a rendezvous point in case direct
 		//      connections to the peer fail
@@ -1238,7 +1258,7 @@ namespace libtorrent
 		// directory, if there is one. The source files will still be removed in
 		// that case.
 		// 
-		// Files that have been renamed to have absolute pahts are not moved by
+		// Files that have been renamed to have absolute paths are not moved by
 		// this function. Keep in mind that files that don't belong to the
 		// torrent but are stored in the torrent's directory may be moved as
 		// well. This goes for files that have been renamed to absolute paths

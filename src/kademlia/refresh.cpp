@@ -65,6 +65,14 @@ bool bootstrap::invoke(observer_ptr o)
 	make_id_secret(target);
 	a["info_hash"] = target.to_string();
 
+	if (o->flags & observer::flag_initial)
+	{
+		// if this packet is being sent to a bootstrap/router node, let it know
+		// that we're actualy bootstrapping (as opposed to being collateral
+		// traffic).
+		a["bs"] = 1;
+	}
+
 //	e["q"] = "find_node";
 //	a["target"] = target.to_string();
 	m_node.stats_counters().inc_stats_counter(counters::dht_get_peers_out);
@@ -80,15 +88,6 @@ bootstrap::bootstrap(
 }
 
 char const* bootstrap::name() const { return "bootstrap"; }
-
-void bootstrap::trim_seed_nodes()
-{
-	// when we're bootstrapping, we want to start as far away from our ID as
-	// possible, to cover as much as possible of the ID space. So, remove all
-	// nodes except for the 32 that are farthest away from us
-	if (m_results.size() > 32)
-		m_results.erase(m_results.begin(), m_results.end() - 32);
-}
 
 void bootstrap::done()
 {

@@ -87,14 +87,14 @@ struct peer_connection: bandwidth_socket, boost::enable_shared_from_this<peer_co
 	int m_priority;
 	bool m_ignore_limits;
 	std::string m_name;
-	int m_quota;
+	boost::int64_t m_quota;
 };
 
 void peer_connection::assign_bandwidth(int channel, int amount)
 {
 	m_quota += amount;
 #ifdef VERBOSE_LOGGING
-	std::cerr << " [" << m_name
+	std::cout << " [" << m_name
 		<< "] assign bandwidth, " << amount << std::endl;
 #endif
 	TEST_CHECK(amount > 0);
@@ -152,13 +152,12 @@ void run_test(connections_t& v
 	, bandwidth_manager& manager
 	, boost::function<void()> f = &nop)
 {
-	std::cerr << "-------------" << std::endl;
-	
+	std::cout << "-------------" << std::endl;
+
 	std::for_each(v.begin(), v.end()
 		, boost::bind(&peer_connection::start, _1));
 
 	libtorrent::aux::session_settings s;
-	initialize_default_settings(s);
 	int tick_interval = s.get_int(settings_pack::tick_interval);
 
 	for (int i = 0; i < int(sample_time * 1000 / tick_interval); ++i)
@@ -186,7 +185,7 @@ void spawn_connections(connections_t& v, bandwidth_manager& bwm
 
 void test_equal_connections(int num, int limit)
 {
-	std::cerr << "\ntest equal connections " << num << " " << limit << std::endl;
+	std::cout << "\ntest equal connections " << num << " " << limit << std::endl;
 	bandwidth_manager manager(0);
 	global_bwc.throttle(limit);
 
@@ -203,19 +202,19 @@ void test_equal_connections(int num, int limit)
 	{
 		sum += (*i)->m_quota;
 
-		std::cerr << (*i)->m_quota / sample_time
+		std::cout << (*i)->m_quota / sample_time
 			<< " target: " << (limit / num) << " eps: " << err << std::endl;
 		TEST_CHECK(close_to((*i)->m_quota / sample_time, limit / num, err));
 	}
 	sum /= sample_time;
-	std::cerr << "sum: " << sum << " target: " << limit << std::endl;
+	std::cout << "sum: " << sum << " target: " << limit << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit, 50));
 }
 
 void test_connections_variable_rate(int num, int limit, int torrent_limit)
 {
-	std::cerr << "\ntest connections variable rate" << num
+	std::cout << "\ntest connections variable rate" << num
 		<< " l: " << limit
 		<< " t: " << torrent_limit
 		<< std::endl;
@@ -236,7 +235,7 @@ void test_connections_variable_rate(int num, int limit, int torrent_limit)
 
 	if (torrent_limit > 0 && limit * num > torrent_limit)
 		limit = torrent_limit / num;
-	
+
 	float sum = 0.f;
 	float err = limit * 0.3f;
 	for (connections_t::iterator i = v.begin()
@@ -244,19 +243,19 @@ void test_connections_variable_rate(int num, int limit, int torrent_limit)
 	{
 		sum += (*i)->m_quota;
 
-		std::cerr << (*i)->m_quota / sample_time
+		std::cout << (*i)->m_quota / sample_time
 			<< " target: " << limit << " eps: " << err << std::endl;
 		TEST_CHECK(close_to((*i)->m_quota / sample_time, limit, err));
 	}
 	sum /= sample_time;
-	std::cerr << "sum: " << sum << " target: " << (limit * num) << std::endl;
+	std::cout << "sum: " << sum << " target: " << (limit * num) << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit * num, limit * 0.3f * num));
 }
 
 void test_single_peer(int limit, bool torrent_limit)
 {
-	std::cerr << "\ntest single peer " << limit << " " << torrent_limit << std::endl;
+	std::cout << "\ntest single peer " << limit << " " << torrent_limit << std::endl;
 	bandwidth_manager manager(0);
 	bandwidth_channel t1;
 	global_bwc.throttle(0);
@@ -277,14 +276,14 @@ void test_single_peer(int limit, bool torrent_limit)
 		sum += (*i)->m_quota;
 	}
 	sum /= sample_time;
-	std::cerr << sum << " target: " << limit << std::endl;
+	std::cout << sum << " target: " << limit << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit, 1000));
 }
 
 void test_torrents(int num, int limit1, int limit2, int global_limit)
 {
-	std::cerr << "\ntest equal torrents " << num
+	std::cout << "\ntest equal torrents " << num
 		<< " l1: " << limit1
 		<< " l2: " << limit2
 		<< " g: " << global_limit << std::endl;
@@ -318,7 +317,7 @@ void test_torrents(int num, int limit1, int limit2, int global_limit)
 		sum += (*i)->m_quota;
 	}
 	sum /= sample_time;
-	std::cerr << sum << " target: " << limit1 << std::endl;
+	std::cout << sum << " target: " << limit1 << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit1, 1000));
 
@@ -329,14 +328,14 @@ void test_torrents(int num, int limit1, int limit2, int global_limit)
 		sum += (*i)->m_quota;
 	}
 	sum /= sample_time;
-	std::cerr << sum << " target: " << limit2 << std::endl;
+	std::cout << sum << " target: " << limit2 << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit2, 1000));
 }
 
 void test_torrents_variable_rate(int num, int limit, int global_limit)
 {
-	std::cerr << "\ntest torrents variable rate" << num
+	std::cout << "\ntest torrents variable rate" << num
 		<< " l: " << limit
 		<< " g: " << global_limit << std::endl;
 	bandwidth_manager manager(0);
@@ -368,7 +367,7 @@ void test_torrents_variable_rate(int num, int limit, int global_limit)
 		sum += (*i)->m_quota;
 	}
 	sum /= sample_time;
-	std::cerr << sum << " target: " << limit << std::endl;
+	std::cout << sum << " target: " << limit << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit, 1000));
 
@@ -379,14 +378,14 @@ void test_torrents_variable_rate(int num, int limit, int global_limit)
 		sum += (*i)->m_quota;
 	}
 	sum /= sample_time;
-	std::cerr << sum << " target: " << limit << std::endl;
+	std::cout << sum << " target: " << limit << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit, 1000));
 }
 
 void test_peer_priority(int limit, bool torrent_limit)
 {
-	std::cerr << "\ntest peer priority " << limit << " " << torrent_limit << std::endl;
+	std::cout << "\ntest peer priority " << limit << " " << torrent_limit << std::endl;
 	bandwidth_manager manager(0);
 	bandwidth_channel t1;
 	global_bwc.throttle(0);
@@ -412,18 +411,18 @@ void test_peer_priority(int limit, bool torrent_limit)
 		sum += (*i)->m_quota;
 	}
 	sum /= sample_time;
-	std::cerr << sum << " target: " << limit << std::endl;
+	std::cout << sum << " target: " << limit << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit, 50));
 
-	std::cerr << "non-prioritized rate: " << p->m_quota / sample_time
+	std::cout << "non-prioritized rate: " << p->m_quota / sample_time
 		<< " target: " << (limit / 200 / 10) << std::endl;
 	TEST_CHECK(close_to(p->m_quota / sample_time, limit / 200 / 10, 5));
 }
 
 void test_no_starvation(int limit)
 {
-	std::cerr << "\ntest no starvation " << limit << std::endl;
+	std::cout << "\ntest no starvation " << limit << std::endl;
 	bandwidth_manager manager(0);
 	bandwidth_channel t1;
 	bandwidth_channel t2;
@@ -448,47 +447,47 @@ void test_no_starvation(int limit)
 		sum += (*i)->m_quota;
 	}
 	sum /= sample_time;
-	std::cerr << sum << " target: " << limit << std::endl;
+	std::cout << sum << " target: " << limit << std::endl;
 	TEST_CHECK(sum > 0);
 	TEST_CHECK(close_to(sum, limit, 50));
 
-	std::cerr << "non-prioritized rate: " << p->m_quota / sample_time
+	std::cout << "non-prioritized rate: " << p->m_quota / sample_time
 		<< " target: " << (limit / 200 / num_peers) << std::endl;
 	TEST_CHECK(close_to(p->m_quota / sample_time, limit / 200 / num_peers, 5));
 }
 
 TORRENT_TEST(equal_connection)
 {
-	test_equal_connections(2, 20);
-	test_equal_connections(2, 2000);
-	test_equal_connections(2, 20000);
-	test_equal_connections(3, 20000);
-	test_equal_connections(5, 20000);
-	test_equal_connections(7, 20000);
-	test_equal_connections(33, 60000);
-	test_equal_connections(33, 500000);
-	test_equal_connections(1, 100000000);
+	test_equal_connections( 2,      20);
+	test_equal_connections( 2,    2000);
+	test_equal_connections( 2,   20000);
+	test_equal_connections( 3,   20000);
+	test_equal_connections( 5,   20000);
+	test_equal_connections( 7,   20000);
+	test_equal_connections(33,   60000);
+	test_equal_connections(33,  500000);
+	test_equal_connections( 1, 1000000);
 }
 
 TORRENT_TEST(conn_var_rate)
 {
-	test_connections_variable_rate(2, 20, 0);
-	test_connections_variable_rate(5, 20000, 0);
-	test_connections_variable_rate(3, 2000, 6000);
-	test_connections_variable_rate(5, 2000, 30000);
+	test_connections_variable_rate( 2,     20, 0);
+	test_connections_variable_rate( 5,  20000, 0);
+	test_connections_variable_rate( 3,   2000, 6000);
+	test_connections_variable_rate( 5,   2000, 30000);
 	test_connections_variable_rate(33, 500000, 0);
 }
 
 TORRENT_TEST(torrents)
 {
-	test_torrents(2, 400, 400, 0);
-	test_torrents(2, 100, 500, 0);
-	test_torrents(2, 3000, 3000, 6000);
-	test_torrents(1, 40000, 40000, 0);
-	test_torrents(24, 50000, 50000, 0);
-	test_torrents(5, 6000, 6000, 3000);
-	test_torrents(5, 6000, 5000, 4000);
-	test_torrents(5, 20000, 20000, 30000);
+	test_torrents( 2,   400,   400,     0);
+	test_torrents( 2,   100,   500,     0);
+	test_torrents( 2,  3000,  3000,  6000);
+	test_torrents( 1, 40000, 40000,     0);
+	test_torrents(24, 50000, 50000,     0);
+	test_torrents( 5,  6000,  6000,  3000);
+	test_torrents( 5,  6000,  5000,  4000);
+	test_torrents( 5, 20000, 20000, 30000);
 }
 
 TORRENT_TEST(torrent_var_rate)

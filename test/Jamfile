@@ -120,6 +120,7 @@ test-suite libtorrent :
 		test_stat_cache.cpp
 		test_enum_net.cpp
 		test_linked_list.cpp
+		test_stack_allocator.cpp
 		test_file_progress.cpp ]
 
 	[ run test_gzip.cpp ]
@@ -130,6 +131,7 @@ test-suite libtorrent :
 	[ run test_storage.cpp ]
 	[ run test_session.cpp ]
 	[ run test_read_piece.cpp ]
+	[ run test_remove_torrent.cpp ]
 
 	[ run test_file.cpp ]
 	[ run test_fast_extension.cpp ]
@@ -151,6 +153,7 @@ test-suite libtorrent :
 	[ run test_web_seed_chunked.cpp ]
 	[ run test_web_seed_ban.cpp ]
 	[ run test_pe_crypto.cpp ]
+	[ run test_ed25519.cpp ]
 
 	[ run test_remap_files.cpp ]
 	[ run test_utp.cpp ]

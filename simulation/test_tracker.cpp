@@ -59,28 +59,30 @@ void test_interval(int interval)
 	sim::simulation sim{network_cfg};
 
 	lt::time_point start = lt::clock_type::now();
+	bool ran_to_completion = false;
 
 	sim::asio::io_service web_server(sim, address_v4::from_string("2.2.2.2"));
 	// listen on port 8080
 	sim::http_server http(web_server, 8080);
 
-	// the timestamps (in seconds) of all announces
-	std::vector<int> announces;
+	// the timestamps of all announces
+	std::vector<lt::time_point> announces;
 
 	http.register_handler("/announce"
-		, [&announces,interval,start](std::string method, std::string req
+		, [&announces,interval,start,&ran_to_completion](std::string method, std::string req
 		, std::map<std::string, std::string>&)
 	{
-		boost::uint32_t seconds = chrono::duration_cast<lt::seconds>(
-			lt::clock_type::now() - start).count();
-		announces.push_back(seconds);
+		// don't collect events once we're done. We're not interested in the
+		// tracker stopped announce for instance
+		if (!ran_to_completion)
+			announces.push_back(lt::clock_type::now());
 
 		char response[500];
 		int size = snprintf(response, sizeof(response), "d8:intervali%de5:peers0:e", interval);
 		return sim::send_response(200, "OK", size) + response;
 	});
 
-	std::vector<int> announce_alerts;
+	std::vector<lt::time_point> announce_alerts;
 
 	lt::settings_pack default_settings = settings();
 	lt::add_torrent_params default_add_torrent;
@@ -95,26 +97,36 @@ void test_interval(int interval)
 		// on alert
 		, [&](lt::alert const* a, lt::session& ses) {
 
+			if (ran_to_completion) return;
 			if (lt::alert_cast<lt::tracker_announce_alert>(a))
-			{
-				boost::uint32_t seconds = chrono::duration_cast<lt::seconds>(
-					a->timestamp() - start).count();
-
-				announce_alerts.push_back(seconds);
-			}
+				announce_alerts.push_back(a->timestamp());
 		}
 		// terminate
-		, [](int ticks, lt::session& ses) -> bool { return ticks > duration; });
+		, [&](int ticks, lt::session& ses) -> bool {
+			if (ticks > duration + 1)
+			{
+				ran_to_completion = true;
+				return true;
+			}
+			return false;
+		});
 
+	TEST_CHECK(ran_to_completion);
 	TEST_EQUAL(announce_alerts.size(), announces.size());
 
-	int counter = 0;
-	for (int i = 0; i < int(announces.size()); ++i)
+	lt::time_point last_announce = announces[0];
+	lt::time_point last_alert = announce_alerts[0];
+	for (int i = 1; i < int(announces.size()); ++i)
 	{
-		TEST_EQUAL(announces[i], counter);
-		TEST_EQUAL(announce_alerts[i], counter);
-		counter += interval;
-		if (counter > duration + 1) counter = duration + 1;
+		// make sure the interval is within 500 ms of what it's supposed to be
+		// (this accounts for network latencies)
+		int const actual_interval_ms = duration_cast<lt::milliseconds>(announces[i] - last_announce).count();
+		TEST_CHECK(abs(actual_interval_ms - interval * 1000) < 500);
+		last_announce = announces[i];
+
+		int const alert_interval_ms = duration_cast<lt::milliseconds>(announce_alerts[i] - last_alert).count();
+		TEST_CHECK(abs(alert_interval_ms - interval * 1000) < 500);
+		last_alert = announce_alerts[i];
 	}
 }
 
@@ -192,7 +204,7 @@ TORRENT_TEST(event_completed)
 		// we there can only be one event
 		const bool has_event = str.find("&event=") != std::string::npos;
 
-		fprintf(stderr, "- %s\n", str.c_str());
+		fprintf(stdout, "- %s\n", str.c_str());
 
 		// there is exactly 0 or 1 events.
 		TEST_EQUAL(int(has_start) + int(has_completed) + int(has_stopped)
@@ -474,8 +486,7 @@ TORRENT_TEST(test_error)
 			TEST_EQUAL(ae.is_working(), false);
 			TEST_EQUAL(ae.message, "test");
 			TEST_EQUAL(ae.url, "http://tracker.com:8080/announce");
-			TEST_EQUAL(ae.last_error, error_code(errors::tracker_failure
-				, get_libtorrent_category()));
+			TEST_EQUAL(ae.last_error, error_code(errors::tracker_failure));
 			TEST_EQUAL(ae.fails, 1);
 		});
 }
@@ -572,7 +583,7 @@ TORRENT_TEST(test_http_status)
 			TEST_EQUAL(ae.is_working(), false);
 			TEST_EQUAL(ae.message, "Not A Tracker");
 			TEST_EQUAL(ae.url, "http://tracker.com:8080/announce");
-			TEST_EQUAL(ae.last_error, error_code(410, get_http_category()));
+			TEST_EQUAL(ae.last_error, error_code(410, http_category()));
 			TEST_EQUAL(ae.fails, 1);
 		});
 }
@@ -619,7 +630,7 @@ TORRENT_TEST(test_invalid_bencoding)
 			TEST_EQUAL(ae.message, "");
 			TEST_EQUAL(ae.url, "http://tracker.com:8080/announce");
 			TEST_EQUAL(ae.last_error, error_code(bdecode_errors::expected_value
-				, get_bdecode_category()));
+				, bdecode_category()));
 			TEST_EQUAL(ae.fails, 1);
 		});
 }
@@ -663,7 +674,7 @@ TORRENT_TEST(try_next)
 
 			for (int i = 0; i < int(tr.size()); ++i)
 			{
-				fprintf(stderr, "tracker \"%s\"\n", tr[i].url.c_str());
+				fprintf(stdout, "tracker \"%s\"\n", tr[i].url.c_str());
 				if (tr[i].url == "http://tracker.com:8080/announce")
 				{
 					TEST_EQUAL(tr[i].fails, 0);
@@ -733,6 +744,9 @@ TORRENT_TEST(tracker_ipv6_argument)
 			std::string::size_type pos = req.find("&ipv6=");
 			TEST_CHECK(pos != std::string::npos);
 			got_ipv6 = pos != std::string::npos;
+			// make sure the IPv6 argument is url encoded
+			TEST_CHECK(req.substr(pos + 6, req.find_first_of('&', pos + 6))
+				== "ffff%3a%3a1337");
 			return sim::send_response(200, "OK", 11) + "d5:peers0:e";
 		}
 		, [](torrent_handle h) {}
@@ -797,6 +811,61 @@ TORRENT_TEST(tracker_ipv6_argument_privacy_mode)
 		, [](torrent_handle h) {});
 	TEST_EQUAL(got_announce, true);
 	TEST_EQUAL(got_ipv6, false);
+}
+
+TORRENT_TEST(tracker_user_agent_privacy_mode_public_torrent)
+{
+	bool got_announce = false;
+	tracker_test(
+		[](lt::add_torrent_params& p, lt::session& ses)
+		{
+			settings_pack pack;
+			pack.set_bool(settings_pack::anonymous_mode, true);
+			pack.set_str(settings_pack::user_agent, "test_agent/1.2.3");
+			ses.apply_settings(pack);
+			p.ti = make_torrent(false);
+			return 60;
+		},
+		[&](std::string method, std::string req
+			, std::map<std::string, std::string>& headers)
+		{
+			got_announce = true;
+
+			// in anonymous mode we should not send a user agent
+			TEST_CHECK(headers["user-agent"] == "");
+			return sim::send_response(200, "OK", 11) + "d5:peers0:e";
+		}
+		, [](torrent_handle h) {}
+		, [](torrent_handle h) {});
+	TEST_EQUAL(got_announce, true);
+}
+
+TORRENT_TEST(tracker_user_agent_privacy_mode_private_torrent)
+{
+	bool got_announce = false;
+	tracker_test(
+		[](lt::add_torrent_params& p, lt::session& ses)
+		{
+			settings_pack pack;
+			pack.set_bool(settings_pack::anonymous_mode, true);
+			pack.set_str(settings_pack::user_agent, "test_agent/1.2.3");
+			ses.apply_settings(pack);
+			p.ti = make_torrent(true);
+			return 60;
+		},
+		[&](std::string method, std::string req
+			, std::map<std::string, std::string>& headers)
+		{
+			got_announce = true;
+
+			// in anonymous mode we should still send the user agent for private
+			// torrents (since private trackers sometimes require it)
+			TEST_CHECK(headers["user-agent"] == "test_agent/1.2.3");
+			return sim::send_response(200, "OK", 11) + "d5:peers0:e";
+		}
+		, [](torrent_handle h) {}
+		, [](torrent_handle h) {});
+	TEST_EQUAL(got_announce, true);
 }
 
 // TODO: test external IP

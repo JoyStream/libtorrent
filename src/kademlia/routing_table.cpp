@@ -431,16 +431,6 @@ out:
 	return candidate;
 }
 
-void routing_table::replacement_cache(bucket_t& nodes) const
-{
-	for (table_t::const_iterator i = m_buckets.begin()
-		, end(m_buckets.end()); i != end; ++i)
-	{
-		std::copy(i->replacements.begin(), i->replacements.end()
-			, std::back_inserter(nodes));
-	}
-}
-
 routing_table::table_t::iterator routing_table::find_bucket(node_id const& id)
 {
 //	TORRENT_ASSERT(id != m_id);
@@ -809,18 +799,19 @@ ip_ok:
 		std::vector<bucket_t::iterator> nodes;
 		bool force_replace = false;
 
+		// the last bucket is special, since it hasn't been split yet, it
+		// includes that top bit as well
+		int const prefix_offset =
+			bucket_index + 1 == m_buckets.size() ? bucket_index : bucket_index + 1;
+
 		{
 			node_id id = e.id;
-			// the last bucket is special, since it hasn't been split yet, it
-			// includes that top bit as well
-			if (bucket_index + 1 == m_buckets.size())
-				id <<= bucket_index;
-			else
-				id <<= bucket_index + 1;
+			id <<= prefix_offset;
+			int const candidate_prefix = id[0] & mask;
 
 			for (j = b.begin(); j != b.end(); ++j)
 			{
-				if (!matching_prefix(*j, mask, id[0] & mask, bucket_index)) continue;
+				if (!matching_prefix(*j, mask, candidate_prefix, prefix_offset)) continue;
 				nodes.push_back(j);
 			}
 		}
@@ -850,7 +841,7 @@ ip_ok:
 			for (j = b.begin(); j != b.end(); ++j)
 			{
 				node_id id = j->id;
-				id <<= bucket_index + 1;
+				id <<= prefix_offset;
 				int this_prefix = (id[0] & mask) >> mask_shift;
 				TORRENT_ASSERT(this_prefix >= 0);
 				TORRENT_ASSERT(this_prefix < int(prefix.size()));

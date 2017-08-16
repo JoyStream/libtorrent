@@ -3,31 +3,35 @@ branches:
   only:
   - master
   - RC_1_1
-os: Previous Visual Studio 2015
 clone_depth: 1
 environment:
   matrix:
   - variant: test_debug
     compiler: msvc-14.0
+    os: Visual Studio 2015
     sim: 1
     linkflags: '"/LIBPATH:C:\\openssl-1.0.1p-vs2015\\lib"'
     include: '"c:\\openssl-1.0.1p-vs2015\\include"'
   - variant: test_debug
     compiler: msvc-12.0
+    os: Visual Studio 2013
     x64: 1
     linkflags: '"/LIBPATH:C:\\openssl-1.0.1p-vs2013\\lib64"'
     include: '"c:\\openssl-1.0.1p-vs2013\\include"'
   - variant: test_debug
     python_package: 1
     compiler: msvc-10.0
+    os: Visual Studio 2015
     linkflags: '"/LIBPATH:C:\\openssl-1.0.1p-vs2010\\lib"'
     include: '"c:\\openssl-1.0.1p-vs2010\\include"'
   - variant: test_barebones
     compiler: msvc-12.0
+    os: Visual Studio 2013
     linkflags: '"/LIBPATH:C:\\openssl-1.0.1p-vs2013\\lib"'
     include: '"c:\\openssl-1.0.1p-vs2013\\include"'
   - variant: test_release
     compiler: msvc-12.0
+    os: Visual Studio 2013
     linkflags: '"/LIBPATH:C:\\openssl-1.0.1p-vs2013\\lib"'
     include: '"c:\\openssl-1.0.1p-vs2013\\include"'
 
@@ -85,7 +89,7 @@ install:
     & copy c:\openssl-1.0.1p-vs2015\lib\libeay32MT.lib c:\openssl-1.0.1p-vs2015\lib\libeay32.lib
   )
 - cd %ROOT_DIRECTORY%
-- set BOOST_ROOT=c:\Libraries\boost
+- set BOOST_ROOT=c:\Libraries\boost_1_63_0
 - set BOOST_BUILD_PATH=%BOOST_ROOT%\tools\build
 - echo %BOOST_ROOT%
 - echo %BOOST_BUILD_PATH%
@@ -126,9 +130,9 @@ build_script:
 test_script:
 - cd %ROOT_DIRECTORY%\test
 - if defined x64 (
-  b2.exe --hash -j2 address-model=64 win-tests %compiler% variant=%variant% link=shared linkflags=%linkflags% include=%include%
+  appveyor-retry b2.exe --hash -j2 address-model=64 win-tests %compiler% variant=%variant% link=shared linkflags=%linkflags% include=%include%
   ) else (
-  b2.exe --hash -j2 address-model=32 win-tests %compiler% variant=%variant% link=shared linkflags=%linkflags% include=%include%
+  appveyor-retry b2.exe --hash -j2 address-model=32 win-tests %compiler% variant=%variant% link=shared linkflags=%linkflags% include=%include%
   )
 - if defined sim (
   cd %ROOT_DIRECTORY%\simulation

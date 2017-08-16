@@ -57,10 +57,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/debug.hpp"
 
-#if TORRENT_USE_RLIMIT
-#include <sys/resource.h>
-#endif
-
 #define DEBUG_DISK_THREAD 0
 
 #if __cplusplus >= 201103L || defined __clang__
@@ -76,7 +72,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #if DEBUG_DISK_THREAD
 #define DLOG debug_log
 #else
-#define DLOG TORRENT_WHILE_0 debug_log
+inline void dummy(char const*, ...) {}
+#define DLOG TORRENT_WHILE_0 dummy
 #endif
 
 #endif // cplusplus
@@ -95,14 +92,10 @@ namespace libtorrent
 
 	namespace {
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-function"
-#endif
+#if DEBUG_DISK_THREAD
 
 	void debug_log(char const* fmt, ...)
 	{
-#if DEBUG_DISK_THREAD
 		static mutex log_mutex;
 		static const time_point start = clock_type::now();
 		va_list v;
@@ -126,10 +119,9 @@ namespace libtorrent
 		prepend_time = (usr[len-1] == '\n');
 		mutex::scoped_lock l(log_mutex);
 		fputs(buf, stderr);
-#else
-	TORRENT_UNUSED(fmt);
-#endif
 	}
+
+#endif // DEBUG_DISK_THREAD
 
 	int file_flags_for_job(disk_io_job* j
 		, bool const coalesce_buffers)
@@ -139,10 +131,6 @@ namespace libtorrent
 		if (coalesce_buffers) ret |= file::coalesce_buffers;
 		return ret;
 	}
-
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 
 	} // anonymous namespace
 
@@ -175,15 +163,6 @@ namespace libtorrent
 		error_code ec;
 		m_disk_cache.set_settings(m_settings, ec);
 		TORRENT_ASSERT(!ec);
-
-		// deduct some margin for epoll/kqueue, log files,
-		// futexes, shared objects etc.
-		// 80% of the available file descriptors should go to connections
-		// 20% goes towards regular files
-		const int max_files = (std::min)((std::max)(5
-				, (max_open_files() - 20) * 2 / 10)
-			, m_file_pool.size_limit());
-		m_file_pool.resize(max_files);
 	}
 
 	disk_io_thread::~disk_io_thread()
@@ -290,10 +269,15 @@ namespace libtorrent
 		apply_pack(pack, m_settings);
 		error_code ec;
 		m_disk_cache.set_settings(m_settings, ec);
+		m_file_pool.resize(m_settings.get_int(settings_pack::file_pool_size));
+#ifndef TORRENT_NO_DEPRECATE
 		if (ec && alerts.should_post<mmap_cache_alert>())
 		{
 			alerts.emplace_alert<mmap_cache_alert>(ec);
 		}
+#else
+		TORRENT_UNUSED(alerts);
+#endif
 	}
 
 	// flush all blocks that are below p->hash.offset, since we've
@@ -341,6 +325,8 @@ namespace libtorrent
 			// pieces from being fllushed prematurely
 			end = int(p->blocks_in_piece);
 		}
+
+		TORRENT_ASSERT(end <= p->blocks_in_piece);
 
 		// count number of blocks that would be flushed
 		int num_blocks = 0;
@@ -771,12 +757,12 @@ namespace libtorrent
 		--pe->piece_refcount;
 		iovec_flushed(pe, flushing, iov_len, 0, error, completed_jobs);
 
+		m_disk_cache.maybe_free_piece(pe);
+
 		// if the cache is under high pressure, we need to evict
 		// the blocks we just flushed to make room for more write pieces
 		int evict = m_disk_cache.num_to_evict(0);
 		if (evict > 0) m_disk_cache.try_evict_blocks(evict);
-
-		m_disk_cache.maybe_free_piece(pe);
 
 		return iov_len;
 	}
@@ -824,12 +810,14 @@ namespace libtorrent
 			// otherwise it will turn into a read piece
 		}
 
-		// mark_for_deletion may erase the piece from the cache, that's
+		// mark_for_eviction may erase the piece from the cache, that's
 		// why we don't have the 'i' iterator referencing it at this point
 		if (flags & (flush_read_cache | flush_delete_cache))
 		{
 			fail_jobs_impl(storage_error(boost::asio::error::operation_aborted), pe->jobs, completed_jobs);
-			m_disk_cache.mark_for_deletion(pe);
+			// we're removing the torrent, don't keep any entries around in the
+			// ghost list
+			m_disk_cache.mark_for_eviction(pe, block_cache::disallow_ghost);
 		}
 	}
 
@@ -844,6 +832,7 @@ namespace libtorrent
 			for (boost::unordered_set<cached_piece_entry*>::const_iterator i = pieces.begin()
 				, end(pieces.end()); i != end; ++i)
 			{
+				TORRENT_ASSERT((*i)->get_storage() == storage);
 				if ((*i)->get_storage() != storage) continue;
 				piece_index.push_back((*i)->piece);
 			}
@@ -1833,12 +1822,21 @@ namespace libtorrent
 		disk_io_job* qj = m_queued_jobs.get_all();
 		jobqueue_t to_abort;
 
+		// if we encounter any read jobs in the queue, we need to clear the
+		// "outstanding_read" flag on its piece, as we abort the job
+		std::vector<std::pair<piece_manager*, int> > pieces;
+
 		while (qj)
 		{
 			disk_io_job* next = qj->next;
 #if TORRENT_USE_ASSERTS
 			qj->next = NULL;
 #endif
+			if (qj->action == disk_io_job::read)
+			{
+				pieces.push_back(std::make_pair(qj->storage.get(), int(qj->piece)));
+			}
+
 			if (qj->storage.get() == storage)
 				to_abort.push_back(qj);
 			else
@@ -1848,6 +1846,15 @@ namespace libtorrent
 		l2.unlock();
 
 		mutex::scoped_lock l(m_cache_mutex);
+		for (std::vector<std::pair<piece_manager*, int> >::iterator i = pieces.begin()
+			, end(pieces.end()); i != end; ++i)
+		{
+			cached_piece_entry* pe = m_disk_cache.find_piece(i->first, i->second);
+			if (pe == NULL) continue;
+			TORRENT_ASSERT(pe->outstanding_read == 1);
+			pe->outstanding_read = 0;
+		}
+
 		flush_cache(storage, flush_delete_cache, completed_jobs, l);
 		l.unlock();
 
@@ -2070,7 +2077,7 @@ namespace libtorrent
 			, end(cache.end()); i != end; )
 		{
 			jobqueue_t temp;
-			if (m_disk_cache.evict_piece(*(i++), temp))
+			if (m_disk_cache.evict_piece(*(i++), temp, block_cache::disallow_ghost))
 				jobs.append(temp);
 		}
 		fail_jobs(storage_error(boost::asio::error::operation_aborted), jobs);
@@ -2117,7 +2124,7 @@ namespace libtorrent
 		// in fact, no jobs should really be hung on this piece
 		// at this point
 		jobqueue_t jobs;
-		bool ok = m_disk_cache.evict_piece(pe, jobs);
+		bool ok = m_disk_cache.evict_piece(pe, jobs, block_cache::allow_ghost);
 		TORRENT_PIECE_ASSERT(ok, pe);
 		TORRENT_UNUSED(ok);
 		fail_jobs(storage_error(boost::asio::error::operation_aborted), jobs);
@@ -2159,6 +2166,12 @@ namespace libtorrent
 		DLOG("kick_hasher: %d - %d (piece: %d offset: %d)\n"
 			, cursor, end, int(pe->piece), ph->offset);
 
+		// save a local copy of offset to avoid concurrent access
+		int offset = ph->offset;
+#if TORRENT_USE_ASSERTS
+		int old_offset = offset;
+#endif
+
 		l.unlock();
 
 		time_point start_time = clock_type::now();
@@ -2166,14 +2179,17 @@ namespace libtorrent
 		for (int i = cursor; i < end; ++i)
 		{
 			cached_block_entry& bl = pe->blocks[i];
-			int size = (std::min)(block_size, piece_size - ph->offset);
+			int size = (std::min)(block_size, piece_size - offset);
 			ph->h.update(bl.buf, size);
-			ph->offset += size;
+			offset += size;
 		}
 
 		boost::uint64_t hash_time = total_microseconds(clock_type::now() - start_time);
 
 		l.lock();
+
+		TORRENT_ASSERT(old_offset == ph->offset);
+		ph->offset = offset;
 
 		TORRENT_PIECE_ASSERT(pe->hashing, pe);
 		TORRENT_PIECE_ASSERT(pe->hash, pe);
@@ -2394,22 +2410,28 @@ namespace libtorrent
 		// to keep the cache footprint low, try to evict a volatile piece
 		m_disk_cache.try_evict_one_volatile();
 
+		// save a local copy of offset to avoid concurrent access
+		int offset = ph->offset;
+#if TORRENT_USE_ASSERTS
+		int old_offset = offset;
+#endif
+
 		l.unlock();
 
 		int ret = 0;
 		int next_locked_block = 0;
-		for (int i = ph->offset / block_size; i < blocks_in_piece; ++i)
+		for (int i = offset / block_size; i < blocks_in_piece; ++i)
 		{
 			file::iovec_t iov;
-			iov.iov_len = (std::min)(block_size, piece_size - ph->offset);
+			iov.iov_len = (std::min)(block_size, piece_size - offset);
 
 			if (next_locked_block < num_locked_blocks
 				&& locked_blocks[next_locked_block] == i)
 			{
 				++next_locked_block;
 				TORRENT_PIECE_ASSERT(pe->blocks[i].buf, pe);
-				TORRENT_PIECE_ASSERT(ph->offset == i * block_size, pe);
-				ph->offset += iov.iov_len;
+				TORRENT_PIECE_ASSERT(offset == i * block_size, pe);
+				offset += iov.iov_len;
 				ph->h.update(pe->blocks[i].buf, iov.iov_len);
 			}
 			else
@@ -2442,9 +2464,9 @@ namespace libtorrent
 
 				time_point start_time = clock_type::now();
 
-				TORRENT_PIECE_ASSERT(ph->offset == i * block_size, pe);
+				TORRENT_PIECE_ASSERT(offset == i * block_size, pe);
 				ret = j->storage->get_storage_impl()->readv(&iov, 1, j->piece
-						, ph->offset, file_flags, j->error);
+						, offset, file_flags, j->error);
 
 				if (ret < 0)
 				{
@@ -2480,8 +2502,8 @@ namespace libtorrent
 					m_stats_counters.inc_stats_counter(counters::disk_job_time, read_time);
 				}
 
-				TORRENT_PIECE_ASSERT(ph->offset == i * block_size, pe);
-				ph->offset += iov.iov_len;
+				TORRENT_PIECE_ASSERT(offset == i * block_size, pe);
+				offset += iov.iov_len;
 				ph->h.update(static_cast<char const*>(iov.iov_base), iov.iov_len);
 
 				l.lock();
@@ -2491,6 +2513,9 @@ namespace libtorrent
 		}
 
 		l.lock();
+
+		TORRENT_ASSERT(old_offset == ph->offset);
+		ph->offset = offset;
 
 		// decrement the refcounts of the blocks we just hashed
 		for (int i = 0; i < num_locked_blocks; ++i)
@@ -2556,11 +2581,9 @@ namespace libtorrent
 		TORRENT_ASSERT(j->storage->num_outstanding_jobs() == 1);
 
 		mutex::scoped_lock l(m_cache_mutex);
-#if TORRENT_USE_ASSERTS
-		m_disk_cache.mark_deleted(*j->storage->files());
-#endif
 
-		flush_cache(j->storage.get(), flush_delete_cache | flush_expect_clear
+		flush_cache(j->storage.get()
+			, flush_read_cache | flush_delete_cache | flush_expect_clear
 			, completed_jobs, l);
 		l.unlock();
 
@@ -3019,14 +3042,14 @@ namespace libtorrent
 		// are still outstanding operations on it, in which case
 		// try again later
 		jobqueue_t jobs;
-		if (m_disk_cache.evict_piece(pe, jobs))
+		if (m_disk_cache.evict_piece(pe, jobs, block_cache::allow_ghost))
 		{
 			fail_jobs_impl(storage_error(boost::asio::error::operation_aborted)
 				, jobs, completed_jobs);
 			return 0;
 		}
 
-		m_disk_cache.mark_for_deletion(pe);
+		m_disk_cache.mark_for_eviction(pe, block_cache::allow_ghost);
 		if (pe->num_blocks == 0) return 0;
 
 		// we should always be able to evict the piece, since
@@ -3064,8 +3087,7 @@ namespace libtorrent
 		{
 			mutex::scoped_lock l(m_job_mutex);
 			TORRENT_ASSERT((j->flags & disk_io_job::in_progress) || !j->storage);
-			// prioritize fence jobs since they're blocking other jobs
-			m_queued_jobs.push_front(j);
+			m_queued_jobs.push_back(j);
 			l.unlock();
 
 			// discard the flush job

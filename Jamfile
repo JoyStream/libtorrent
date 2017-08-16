@@ -58,7 +58,7 @@ else
 		: : $(boost-include-path) ;
 }
 
-VERSION = 1.1.1 ;
+VERSION = 1.1.4 ;
 
 # rule for linking the correct libraries depending
 # on features and target-os
@@ -234,11 +234,11 @@ rule warnings ( properties * )
 		result += <cflags>-Wno-padded ;
 		result += <cflags>-Wno-global-constructors ;
 		result += <cxxflags>-Wno-c++98-compat ;
+# this warns on any global static object, which are used for error_category
+# objects
 		result += <cflags>-Wno-exit-time-destructors ;
-		result += <cflags>-Wno-documentation-unknown-command ;
-		result += <cflags>-Wno-disabled-macro-expansion ;
 		result += <cflags>-Wno-unused-command-line-argument ;
-		result += <cflags>-Wno-error=implicit-fallthrough ;
+		result += <cflags>-Wno-implicit-fallthrough ;
 		result += <cflags>-Wno-c++11-long-long ;
 		result += <cflags>-Wno-variadic-macros ;
 
@@ -274,7 +274,6 @@ rule warnings ( properties * )
 	{
 # disable warning C4503: decorated name length exceeded, name was truncated
 		result += <cflags>/wd4503 ;
-		result += <warnings>all ;
 
 # enable these warnings again, once the other ones are dealt with
 
@@ -505,7 +504,7 @@ feature export-extra : off on : composite propagated ;
 variant test_release : release
 	: <asserts>production <debug-symbols>on
 	  <invariant-checks>full <boost-link>shared <optimization>off
-	  <export-extra>on <debug-iterators>on <threading>multi
+	  <export-extra>on <debug-iterators>on <threading>multi <inlining>on
 	;
 variant test_debug : debug
 	: <crypto>openssl <logging>on <disk-stats>on
@@ -583,6 +582,7 @@ SOURCES =
 	escape_string
 	string_util
 	file
+	fingerprint
 	gzip
 	hasher
 	hex

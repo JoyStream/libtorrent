@@ -154,16 +154,6 @@ namespace libtorrent
 			lru_file_entry& e = i->second;
 			e.last_use = aux::time_now();
 
-			if (e.key != st && ((e.mode & file::rw_mask) != file::read_only
-				|| (m & file::rw_mask) != file::read_only))
-			{
-				// this means that another instance of the storage
-				// is using the exact same file.
-				ec = errors::file_collision;
-				return file_handle();
-			}
-
-			e.key = st;
 			// if we asked for a file in write mode,
 			// and the cached file is is not opened in
 			// write mode, re-open it
@@ -212,18 +202,15 @@ namespace libtorrent
 			set_low_priority(e.file_ptr);
 #endif
 		e.mode = m;
-		e.key = st;
-		m_files.insert(std::make_pair(std::make_pair(st, file_index), e));
-		TORRENT_ASSERT(e.file_ptr->is_open());
-
 		file_handle file_ptr = e.file_ptr;
+		m_files.insert(std::make_pair(std::make_pair(st, file_index), e));
+		TORRENT_ASSERT(file_ptr->is_open());
 
-		// the file is not in our cache
 		if (int(m_files.size()) >= m_size)
 		{
 			// the file cache is at its maximum size, close
 			// the least recently used (lru) file from it
-			remove_oldest(l);
+			defer_destruction = remove_oldest(l);
 		}
 		return file_ptr;
 	}
@@ -245,20 +232,19 @@ namespace libtorrent
 		}
 	}
 
-	void file_pool::remove_oldest(mutex::scoped_lock& l)
+	file_handle file_pool::remove_oldest(mutex::scoped_lock&)
 	{
 		file_set::iterator i = std::min_element(m_files.begin(), m_files.end()
 			, boost::bind(&lru_file_entry::last_use, boost::bind(&file_set::value_type::second, _1))
 				< boost::bind(&lru_file_entry::last_use, boost::bind(&file_set::value_type::second, _2)));
-		if (i == m_files.end()) return;
+		if (i == m_files.end()) return file_handle();
 
 		file_handle file_ptr = i->second.file_ptr;
 		m_files.erase(i);
 
 		// closing a file may be long running operation (mac os x)
-		l.unlock();
-		file_ptr.reset();
-		l.lock();
+		// let the calling function destruct it after releasing the mutex
+		return file_ptr;
 	}
 
 	void file_pool::release(void* st, int file_index)
@@ -267,11 +253,12 @@ namespace libtorrent
 
 		file_set::iterator i = m_files.find(std::make_pair(st, file_index));
 		if (i == m_files.end()) return;
-		
+
 		file_handle file_ptr = i->second.file_ptr;
 		m_files.erase(i);
 
-		// closing a file may be long running operation (mac os x)
+		// closing a file may take a long time (mac os x), so make sure
+		// we're not holding the mutex
 		l.unlock();
 		file_ptr.reset();
 	}
@@ -284,26 +271,22 @@ namespace libtorrent
 
 		if (st == 0)
 		{
-			file_set tmp;
-			tmp.swap(m_files);
+			m_files.clear();
 			l.unlock();
 			return;
 		}
 
+		file_set::iterator begin = m_files.lower_bound(std::make_pair(st, 0));
+		file_set::iterator end = m_files.upper_bound(std::make_pair(st, std::numeric_limits<int>::max()));
+
 		std::vector<file_handle> to_close;
-		for (file_set::iterator i = m_files.begin();
-			i != m_files.end();)
+		while (begin != end)
 		{
-			if (i->second.key == st)
-			{
-				to_close.push_back(i->second.file_ptr);
-				m_files.erase(i++);
-			}
-			else
-				++i;
+			to_close.push_back(begin->second.file_ptr);
+			m_files.erase(begin++);
 		}
 		l.unlock();
-		// the files are closed here
+		// the files are closed here while the lock is not held
 	}
 
 #if TORRENT_USE_ASSERTS
@@ -323,7 +306,7 @@ namespace libtorrent
 		for (file_set::const_iterator i = m_files.begin();
 			i != m_files.end(); ++i)
 		{
-			if (i->second.key == st && !i->second.file_ptr.unique())
+			if (i->first.first == st && !i->second.file_ptr.unique())
 				return false;
 		}
 		return true;
@@ -332,6 +315,9 @@ namespace libtorrent
 
 	void file_pool::resize(int size)
 	{
+		// these are destructed _after_ the mutex is released
+		std::vector<file_handle> defer_destruction;
+
 		mutex::scoped_lock l(m_mutex);
 
 		TORRENT_ASSERT(size > 0);
@@ -342,8 +328,25 @@ namespace libtorrent
 
 		// close the least recently used files
 		while (int(m_files.size()) > m_size)
-			remove_oldest(l);
+			defer_destruction.push_back(remove_oldest(l));
 	}
 
+	void file_pool::close_oldest()
+	{
+		mutex::scoped_lock l(m_mutex);
+
+		file_set::iterator i = std::min_element(m_files.begin(), m_files.end()
+			, boost::bind(&lru_file_entry::opened, boost::bind(&file_set::value_type::second, _1))
+				< boost::bind(&lru_file_entry::opened, boost::bind(&file_set::value_type::second, _2)));
+		if (i == m_files.end()) return;
+
+		file_handle file_ptr = i->second.file_ptr;
+		m_files.erase(i);
+
+		// closing a file may be long running operation (mac os x)
+		l.unlock();
+		file_ptr.reset();
+		l.lock();
+	}
 }
 

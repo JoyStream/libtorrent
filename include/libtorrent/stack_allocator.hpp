@@ -79,14 +79,14 @@ namespace libtorrent { namespace aux
 		char* ptr(int idx)
 		{
 			if(idx < 0) return NULL;
-			if(idx >= int(m_storage.size())) return NULL;
+			TORRENT_ASSERT(idx < int(m_storage.size()));
 			return &m_storage[idx];
 		}
 
 		char const* ptr(int idx) const
 		{
 			if(idx < 0) return NULL;
-			if(idx >= int(m_storage.size())) return NULL;
+			TORRENT_ASSERT(idx < int(m_storage.size()));
 			return &m_storage[idx];
 		}
 

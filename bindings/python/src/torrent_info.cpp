@@ -18,6 +18,7 @@
 
 using namespace boost::python;
 using namespace libtorrent;
+namespace lt = libtorrent;
 
 namespace
 {
@@ -62,11 +63,26 @@ namespace
             d["url"] = i->url;
             d["type"] = i->type;
             d["auth"] = i->auth;
-            d["extra_headers"] = i->extra_headers;
             ret.append(d);
         }
 
         return ret;
+    }
+
+    void set_web_seeds(torrent_info& ti, list ws)
+    {
+        std::vector<web_seed_entry> web_seeds;
+        int const len = boost::python::len(ws);
+        for (int i = 0; i < len; i++)
+        {
+           dict e = extract<dict>(ws[i]);
+           int const type = extract<int>(e["type"]);
+           web_seeds.push_back(web_seed_entry(
+              extract<std::string>(e["url"])
+              , static_cast<web_seed_entry::type_t>(type)
+              , extract<std::string>(e["auth"])));
+        }
+        ti.set_web_seeds(web_seeds);
     }
 
     list get_merkle_tree(torrent_info const& ti)
@@ -111,10 +127,10 @@ namespace
        return result;
     }
 
-    int get_tier(announce_entry const& ae) { return ae.tier; }
-    void set_tier(announce_entry& ae, int v) { ae.tier = v; }
-    int get_fail_limit(announce_entry const& ae) { return ae.fail_limit; }
-    void set_fail_limit(announce_entry& ae, int l) { ae.fail_limit = l; }
+    // Create getters for announce_entry data members with non-trivial types which need converting.
+    lt::time_point get_next_announce(announce_entry const& ae) { return ae.next_announce; }
+    lt::time_point get_min_announce(announce_entry const& ae) { return ae.min_announce; }
+    // announce_entry data member bit-fields.
     int get_fails(announce_entry const& ae) { return ae.fails; }
     int get_source(announce_entry const& ae) { return ae.source; }
     bool get_verified(announce_entry const& ae) { return ae.verified; }
@@ -122,8 +138,13 @@ namespace
     bool get_start_sent(announce_entry const& ae) { return ae.start_sent; }
     bool get_complete_sent(announce_entry const& ae) { return ae.complete_sent; }
     bool get_send_stats(announce_entry const& ae) { return ae.send_stats; }
+    // announce_entry method requires lt::time_point.
+    bool can_announce(announce_entry const& ae, bool is_seed) {
+        lt::time_point now = lt::clock_type::now();
+        return ae.can_announce(now, is_seed);
+    }
 
-#if !defined TORRENT_NO_DEPRECATE
+#ifndef TORRENT_NO_DEPRECATE
     boost::int64_t get_size(file_entry const& fe) { return fe.size; }
     boost::int64_t get_offset(file_entry const& fe) { return fe.offset; }
     boost::int64_t get_file_base(file_entry const& fe) { return fe.file_base; }
@@ -228,6 +249,7 @@ void bind_torrent_info()
         .def("add_url_seed", &torrent_info::add_url_seed)
         .def("add_http_seed", &torrent_info::add_http_seed)
         .def("web_seeds", get_web_seeds)
+        .def("set_web_seeds", set_web_seeds)
 
         .def("name", &torrent_info::name, copy)
         .def("comment", &torrent_info::comment, copy)
@@ -241,12 +263,15 @@ void bind_torrent_info()
         .def("set_merkle_tree", set_merkle_tree)
         .def("piece_size", &torrent_info::piece_size)
 
+        .def("similar_torrents", &torrent_info::similar_torrents)
+        .def("collections", &torrent_info::collections)
+        .def("ssl_cert", &torrent_info::ssl_cert)
         .def("num_files", &torrent_info::num_files)
         .def("rename_file", rename_file0)
         .def("remap_files", &torrent_info::remap_files)
         .def("files", &torrent_info::files, return_internal_reference<>())
         .def("orig_files", &torrent_info::orig_files, return_internal_reference<>())
-#if !defined TORRENT_NO_DEPRECATE
+#ifndef TORRENT_NO_DEPRECATE
         .def("file_at", &torrent_info::file_at)
         .def("file_at_offset", &torrent_info::file_at_offset)
 #if TORRENT_USE_WSTRING
@@ -254,7 +279,10 @@ void bind_torrent_info()
 #endif // TORRENT_USE_WSTRING
 #endif // TORRENT_NO_DEPRECATE
 
+        .def("is_valid", &torrent_info::is_valid)
         .def("priv", &torrent_info::priv)
+        .def("is_i2p", &torrent_info::is_i2p)
+        .def("is_merkle_torrent", &torrent_info::is_merkle_torrent)
         .def("trackers", range(begin_trackers, end_trackers))
 
         .def("creation_date", &torrent_info::creation_date)
@@ -267,7 +295,7 @@ void bind_torrent_info()
         .def("map_file", &torrent_info::map_file)
         ;
 
-#if !defined TORRENT_NO_DEPRECATE
+#ifndef TORRENT_NO_DEPRECATE
     class_<file_entry>("file_entry")
         .def_readwrite("path", &file_entry::path)
         .def_readwrite("symlink_path", &file_entry::symlink_path)
@@ -285,8 +313,16 @@ void bind_torrent_info()
 
     class_<announce_entry>("announce_entry", init<std::string const&>())
         .def_readwrite("url", &announce_entry::url)
-        .add_property("tier", &get_tier, &set_tier)
-        .add_property("fail_limit", &get_fail_limit, &set_fail_limit)
+        .def_readonly("trackerid", &announce_entry::trackerid)
+        .def_readonly("message", &announce_entry::message)
+        .def_readonly("last_error", &announce_entry::last_error)
+        .add_property("next_announce", &get_next_announce)
+        .add_property("min_announce", &get_min_announce)
+        .def_readonly("scrape_incomplete", &announce_entry::scrape_incomplete)
+        .def_readonly("scrape_complete", &announce_entry::scrape_complete)
+        .def_readonly("scrape_downloaded", &announce_entry::scrape_downloaded)
+        .def_readwrite("tier", &announce_entry::tier)
+        .def_readwrite("fail_limit", &announce_entry::fail_limit)
         .add_property("fails", &get_fails)
         .add_property("source", &get_source)
         .add_property("verified", &get_verified)
@@ -295,8 +331,10 @@ void bind_torrent_info()
         .add_property("complete_sent", &get_complete_sent)
         .add_property("send_stats", &get_send_stats)
 
+        .def("next_announce_in", &announce_entry::next_announce_in)
+        .def("min_announce_in", &announce_entry::min_announce_in)
         .def("reset", &announce_entry::reset)
-        .def("can_announce", &announce_entry::can_announce)
+        .def("can_announce", can_announce)
         .def("is_working", &announce_entry::is_working)
         .def("trim", &announce_entry::trim)
         ;

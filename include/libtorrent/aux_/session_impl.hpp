@@ -155,8 +155,6 @@ namespace libtorrent
 		struct tracker_logger;
 #endif
 
-		TORRENT_EXPORT std::pair<bencode_map_entry*, int> settings_map();
-
 		// this is the link between the main thread and the
 		// thread started to run the main downloader loop
 		struct TORRENT_EXTRA_EXPORT session_impl TORRENT_FINAL
@@ -172,9 +170,6 @@ namespace libtorrent
 			// maximum length of query names which can be registered by extensions
 			enum { max_dht_query_length = 15 };
 
-#ifdef TORRENT_DEBUG
-//			friend class ::libtorrent::peer_connection;
-#endif
 #if TORRENT_USE_INVARIANT_CHECKS
 			friend class libtorrent::invariant_access;
 #endif
@@ -242,10 +237,6 @@ namespace libtorrent
 			void async_accept(boost::shared_ptr<tcp::acceptor> const& listener, bool ssl);
 			void on_accept_connection(boost::shared_ptr<socket_type> const& s
 				, boost::weak_ptr<tcp::acceptor> listener, error_code const& e, bool ssl);
-			void on_socks_listen(boost::shared_ptr<socket_type> const& s
-				, error_code const& e);
-			void on_socks_accept(boost::shared_ptr<socket_type> const& s
-				, error_code const& e);
 
 			void incoming_connection(boost::shared_ptr<socket_type> const& s);
 
@@ -462,8 +453,13 @@ namespace libtorrent
 			int rate_limit(peer_class_t c, int channel) const;
 
 			bool preemptive_unchoke() const TORRENT_OVERRIDE;
+
+			// deprecated, use stats counters ``num_peers_up_unchoked`` instead
 			int num_uploads() const TORRENT_OVERRIDE
 			{ return int(m_stats_counters[counters::num_peers_up_unchoked]); }
+
+			// deprecated, use stats counters ``num_peers_connected`` +
+			// ``num_peers_half_open`` instead.
 			int num_connections() const TORRENT_OVERRIDE { return int(m_connections.size()); }
 
 			int peak_up_rate() const { return m_peak_up_rate; }
@@ -649,6 +645,7 @@ namespace libtorrent
 			void update_privileged_ports();
 			void update_auto_sequential();
 			void update_max_failcount();
+			void update_close_file_interval();
 
 			void update_upnp();
 			void update_natpmp();
@@ -771,6 +768,8 @@ namespace libtorrent
 			// peer class for local peers
 			peer_class_t m_local_peer_class;
 
+			resolver m_host_resolver;
+
 			tracker_manager m_tracker_manager;
 			torrent_map m_torrents;
 
@@ -884,20 +883,13 @@ namespace libtorrent
 #endif
 
 #ifdef TORRENT_USE_OPENSSL
-			ssl::context* ssl_ctx() { return &m_ssl_ctx; }
+			ssl::context* ssl_ctx() TORRENT_OVERRIDE { return &m_ssl_ctx; }
 			void on_incoming_utp_ssl(boost::shared_ptr<socket_type> const& s);
 			void ssl_handshake(error_code const& ec, boost::shared_ptr<socket_type> s);
 #endif
 
-			// when as a socks proxy is used for peers, also
-			// listen for incoming connections on a socks connection
-			boost::shared_ptr<socket_type> m_socks_listen_socket;
-			boost::uint16_t m_socks_listen_port;
-
 			// round-robin index into m_net_interfaces
 			mutable boost::uint8_t m_interface_index;
-
-			void open_new_incoming_socks_connection();
 
 			enum listen_on_flags_t
 			{
@@ -976,6 +968,7 @@ namespace libtorrent
 			int m_peak_down_rate;
 
 			void on_tick(error_code const& e);
+			void on_close_file(error_code const& e);
 
 			void try_connect_more_peers();
 			void auto_manage_checking_torrents(std::vector<torrent*>& list
@@ -1123,7 +1116,10 @@ namespace libtorrent
 			// by Local service discovery
 			deadline_timer m_lsd_announce_timer;
 
-			resolver m_host_resolver;
+			// this is the timer used to call ``close_oldest`` on the ``file_pool``
+			// object. This closes the file that's been opened the longest every
+			// time it's called, to force the windows disk cache to be flushed
+			deadline_timer m_close_file_timer;
 
 			// the index of the torrent that will be offered to
 			// connect to a peer next time on_tick is called.

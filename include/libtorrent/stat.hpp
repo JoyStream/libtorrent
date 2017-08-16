@@ -38,7 +38,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <assert.h>
 #include <cstring>
 #include <limits>
+
+#include "libtorrent/aux_/disable_warnings_push.hpp"
 #include <boost/cstdint.hpp>
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 #include "libtorrent/invariant_check.hpp"
 #include "libtorrent/config.hpp"
@@ -257,6 +260,8 @@ namespace libtorrent
 		// these are the channels we keep stats for
 		enum
 		{
+			// TODO: 3 everything but payload counters and rates could probably be
+			// removed from here
 			upload_payload,
 			upload_protocol,
 			download_payload,

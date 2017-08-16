@@ -96,15 +96,15 @@ namespace libtorrent
 
 #ifndef TORRENT_NO_DEPRECATE
 			,
-			save_as_map =       0x040,
+			save_as_map TORRENT_DEPRECATED_ENUM =       0x040,
 			// saves RSS feeds
-			save_feeds =        0x080,
-			save_proxy =        0x008,
-			save_i2p_proxy =    0x010,
-			save_dht_proxy = save_proxy,
-			save_peer_proxy = save_proxy,
-			save_web_proxy = save_proxy,
-			save_tracker_proxy = save_proxy
+			save_feeds TORRENT_DEPRECATED_ENUM =        0x080,
+			save_proxy TORRENT_DEPRECATED_ENUM =        0x008,
+			save_i2p_proxy TORRENT_DEPRECATED_ENUM =    0x010,
+			save_dht_proxy TORRENT_DEPRECATED_ENUM = save_proxy,
+			save_peer_proxy TORRENT_DEPRECATED_ENUM = save_proxy,
+			save_web_proxy TORRENT_DEPRECATED_ENUM = save_proxy,
+			save_tracker_proxy TORRENT_DEPRECATED_ENUM = save_proxy
 #endif
 		};
 
@@ -119,6 +119,11 @@ namespace libtorrent
 		// The ``flags`` argument is used to filter which parts of the session
 		// state to save or load. By default, all state is saved/restored (except
 		// for the individual torrents). see save_state_flags_t
+		//
+		// When saving settings, there are two fields that are *not* loaded.
+		// ``peer_fingerprint`` and ``user_agent``. Those are left as configured
+		// by the ``session_settings`` passed to the session constructor or
+		// subsequently set via apply_settings().
 		void save_state(entry& e, boost::uint32_t flags = 0xffffffff) const;
 		void load_state(bdecode_node const& e, boost::uint32_t flags = 0xffffffff);
 
@@ -254,8 +259,11 @@ namespace libtorrent
 		void resume();
 		bool is_paused() const;
 
+		// *the feature of dynamically loading/unloading torrents is deprecated
+		// and discouraged*
+		//
 		// This function enables dynamic-loading-of-torrent-files_. When a
-		// torrent is unloaded but needs to be availabe in memory, this function
+		// torrent is unloaded but needs to be available in memory, this function
 		// is called **from within the libtorrent network thread**. From within
 		// this thread, you can **not** use any of the public APIs of libtorrent
 		// itself. The the info-hash of the torrent is passed in to the function
@@ -367,6 +375,10 @@ namespace libtorrent
 		// ``add_dht_node`` takes a host name and port pair. That endpoint will be
 		// pinged, and if a valid DHT reply is received, the node will be added to
 		// the routing table.
+		void add_dht_node(std::pair<std::string, int> const& node);
+
+#ifndef TORRENT_NO_DEPRECATE
+		// deprecated, use settings_pack::dht_bootstrap_nodes instead
 		//
 		// ``add_dht_router`` adds the given endpoint to a list of DHT router
 		// nodes. If a search is ever made while the routing table is empty,
@@ -377,8 +389,9 @@ namespace libtorrent
 		//
 		// An example routing node that you could typically add is
 		// ``router.bittorrent.com``.
-		void add_dht_node(std::pair<std::string, int> const& node);
+		TORRENT_DEPRECATED
 		void add_dht_router(std::pair<std::string, int> const& node);
+#endif
 
 		// query the DHT for an immutable item at the ``target`` hash.
 		// the result is posted as a dht_immutable_item_alert.
@@ -394,7 +407,7 @@ namespace libtorrent
 
 		// store the given bencoded data as an immutable item in the DHT.
 		// the returned hash is the key that is to be used to look the item
-		// up again. It's just the sha-1 hash of the bencoded form of the
+		// up again. It's just the SHA-1 hash of the bencoded form of the
 		// structure.
 		sha1_hash dht_put_item(entry data);
 
@@ -411,7 +424,7 @@ namespace libtorrent
 		// 	to be set to the value to be stored by the function.
 		//
 		// boost::array<char,64>& signature
-		// 	the signature authenticating the current value. This may be zeroes
+		// 	the signature authenticating the current value. This may be zeros
 		// 	if there is currently no value stored. The function is expected to
 		// 	fill in this buffer with the signature of the new value to store.
 		// 	To generate the signature, you may want to use the
@@ -431,7 +444,7 @@ namespace libtorrent
 		// it is critical to not perform any blocking operations. Ideally not
 		// even locking a mutex. Pass any data required for this function along
 		// with the function object's context and make the function entirely
-		// self-contained. The only reason data blobs' values are computed
+		// self-contained. The only reason data blob's value is computed
 		// via a function instead of just passing in the new value is to avoid
 		// race conditions. If you want to *update* the value in the DHT, you
 		// must first retrieve it, then modify it, then write it back. The way
@@ -470,11 +483,11 @@ namespace libtorrent
 		// in libtorrent are:
 		//
 		// metadata extension
-		// 	Allows peers to download the metadata (.torren files) from the swarm
+		// 	Allows peers to download the metadata (.torrent files) from the swarm
 		// 	directly. Makes it possible to join a swarm with just a tracker and
 		// 	info-hash.
 		//
-		// ::
+		// .. code:: c++
 		//
 		// 	#include <libtorrent/extensions/metadata_transfer.hpp>
 		// 	ses.add_extension(&libtorrent::create_metadata_plugin);
@@ -482,7 +495,7 @@ namespace libtorrent
 		// uTorrent metadata
 		// 	Same as ``metadata extension`` but compatible with uTorrent.
 		//
-		// ::
+		// .. code:: c++
 		//
 		// 	#include <libtorrent/extensions/ut_metadata.hpp>
 		// 	ses.add_extension(&libtorrent::create_ut_metadata_plugin);
@@ -490,7 +503,7 @@ namespace libtorrent
 		// uTorrent peer exchange
 		// 	Exchanges peers between clients.
 		//
-		// ::
+		// .. code:: c++
 		//
 		// 	#include <libtorrent/extensions/ut_pex.hpp>
 		// 	ses.add_extension(&libtorrent::create_ut_pex_plugin);
@@ -500,7 +513,7 @@ namespace libtorrent
 		// 	that sends bad data with very high accuracy. Should
 		// 	eliminate most problems on poisoned torrents.
 		//
-		// ::
+		// .. code:: c++
 		//
 		// 	#include <libtorrent/extensions/smart_ban.hpp>
 		// 	ses.add_extension(&libtorrent::create_smart_ban_plugin);
@@ -600,34 +613,7 @@ namespace libtorrent
 		// settings_pack::listen_interfaces to try another interface and port to
 		// bind to.
 		//
-		// ``listen_port()`` returns the port we ended up listening on. If the
-		// port specified in settings_pack::listen_interfaces failed, libtorrent
-		// will try to bind to the next port, and so on. If it fails
-		// settings_pack::max_retry_port_bind times, it will bind to port 0
-		// (meaning the OS picks the port). The only way to know which port it
-		// ended up binding to is to ask for it by calling ``listen_port()``.
-		//
-		// If all ports in the specified range fails to be opened for listening,
-		// libtorrent will try to use port 0 (which tells the operating system to
-		// pick a port that's free). If that still fails you may see a
-		// listen_failed_alert with port 0 even if you didn't ask to listen on
-		// it.
-		//
-		// It is possible to prevent libtorrent from binding to port 0 by passing
-		// in the flag ``session::no_system_port`` in the ``flags`` argument.
-		//
-		// The interface parameter can also be a hostname that will resolve to
-		// the device you want to listen on. If you don't specify an interface,
-		// libtorrent may attempt to listen on multiple interfaces (typically
-		// 0.0.0.0 and ::). This means that if your IPv6 interface doesn't work,
-		// you may still see a listen_failed_alert, even though the IPv4 port
-		// succeeded.
-		//
-		// The ``flags`` parameter can either be 0 or
-		// ``session::listen_reuse_address``, which will set the reuse address
-		// socket option on the listen socket(s). By default, the listen socket
-		// does not use reuse address. If you're running a service that needs to
-		// run on a specific port no matter if it's in use, set this flag.
+		// ``listen_port()`` returns the port we ended up listening on.
 		unsigned short listen_port() const;
 		unsigned short ssl_listen_port() const;
 		bool is_listening() const;
@@ -643,7 +629,9 @@ namespace libtorrent
 		// For more info, see ip_filter.
 		//
 		// For example, to make all peers in the range 200.1.1.0 - 200.1.255.255
-		// belong to their own peer class, apply the following filter::
+		// belong to their own peer class, apply the following filter:
+		// 
+		// .. code:: c++
 		//
 		// 	ip_filter f;
 		// 	int my_class = ses.create_peer_class("200.1.x.x IP range");
@@ -683,7 +671,7 @@ namespace libtorrent
 		void set_peer_class_type_filter(peer_class_type_filter const& f);
 
 		// Creates a new peer class (see peer-classes_) with the given name. The
-		// returned integer is the new peer class' identifier. Peer classes may
+		// returned integer is the new peer class identifier. Peer classes may
 		// have the same name, so each invocation of this function creates a new
 		// class and returns a unique identifier.
 		//
@@ -742,8 +730,8 @@ namespace libtorrent
 		enum listen_on_flags_t
 		{
 			// this is always on starting with 0.16.2
-			listen_reuse_address = 0x01,
-			listen_no_system_port = 0x02
+			listen_reuse_address TORRENT_DEPRECATED_ENUM = 0x01,
+			listen_no_system_port TORRENT_DEPRECATED_ENUM = 0x02
 		};
 
 		// deprecated in 0.16
@@ -985,6 +973,8 @@ namespace libtorrent
 		void set_alert_notify(boost::function<void()> const& fun);
 
 #ifndef TORRENT_NO_DEPRECATE
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+
 		TORRENT_DEPRECATED
 		void set_severity_level(alert::severity_t s);
 
@@ -1004,11 +994,6 @@ namespace libtorrent
 		TORRENT_DEPRECATED
 		boost::uint32_t get_alert_mask() const;
 
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-
 		// This sets a function to be called (from within libtorrent's netowrk
 		// thread) every time an alert is posted. Since the function (``fun``) is
 		// run in libtorrent's internal thread, it may not block.
@@ -1021,9 +1006,7 @@ namespace libtorrent
 		void set_alert_dispatch(
 			boost::function<void(std::auto_ptr<alert>)> const& fun);
 
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 		// Starts and stops Local Service Discovery. This service will broadcast
 		// the infohashes of all the non-private torrents on the local network to

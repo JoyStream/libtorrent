@@ -306,7 +306,7 @@ void http_connection::start(std::string const& hostname, int port
 		if (is_i2p && i2p_conn->proxy().type != settings_pack::i2p_proxy)
 		{
 			m_timer.get_io_service().post(boost::bind(&http_connection::callback
-				, me, error_code(errors::no_i2p_router, get_libtorrent_category()), static_cast<char*>(NULL), 0));
+				, me, error_code(errors::no_i2p_router), static_cast<char*>(NULL), 0));
 			return;
 		}
 #endif
@@ -449,12 +449,14 @@ void http_connection::on_timeout(boost::weak_ptr<http_connection> p
 			error_code ec;
 			c->m_sock.close(ec);
 			if (!c->m_connecting) c->connect();
+			c->m_last_receive = now;
+			c->m_start_time = c->m_last_receive;
 		}
 		else
 		{
 			c->callback(boost::asio::error::timed_out);
+			return;
 		}
-		return;
 	}
 	else
 	{

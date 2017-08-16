@@ -34,6 +34,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/broadcast_socket.hpp"
 #include "libtorrent/socket_io.hpp" // for print_endpoint
 #include "libtorrent/announce_entry.hpp"
+#include "libtorrent/fingerprint.hpp"
 
 #include "test.hpp"
 #include "setup_transfer.hpp"
@@ -78,9 +79,9 @@ TORRENT_TEST(primitives)
 		int delay = ae.next_announce_in();
 		TEST_CHECK(delay > last);
 		last = delay;
-		fprintf(stderr, "%d, ", delay);
+		fprintf(stdout, "%d, ", delay);
 	}
-	fprintf(stderr, "\n");
+	fprintf(stdout, "\n");
 
 	// test error codes
 	TEST_CHECK(error_code(errors::http_error).message() == "HTTP error");
@@ -90,8 +91,8 @@ TORRENT_TEST(primitives)
 	TEST_CHECK(error_code(errors::http_parse_error).message() == "Invalid HTTP header");
 	TEST_CHECK(error_code(errors::error_code_max).message() == "Unknown error");
 
-	TEST_CHECK(error_code(errors::unauthorized, get_http_category()).message() == "401 Unauthorized");
-	TEST_CHECK(error_code(errors::service_unavailable, get_http_category()).message() == "503 Service Unavailable");
+	TEST_CHECK(error_code(errors::unauthorized, http_category()).message() == "401 Unauthorized");
+	TEST_CHECK(error_code(errors::service_unavailable, http_category()).message() == "503 Service Unavailable");
 
 	// test snprintf
 
@@ -146,11 +147,11 @@ TORRENT_TEST(primitives)
 #if TORRENT_USE_IPV6
 	TEST_EQUAL(print_address(v6("2001:ff::1")), "2001:ff::1");
 	parse_endpoint("[ff::1]", ec);
-	TEST_EQUAL(ec, error_code(errors::invalid_port, get_libtorrent_category()));
+	TEST_EQUAL(ec, error_code(errors::invalid_port));
 #endif
 
 	parse_endpoint("[ff::1:5", ec);
-	TEST_EQUAL(ec, error_code(errors::expected_close_bracket_in_address, get_libtorrent_category()));
+	TEST_EQUAL(ec, error_code(errors::expected_close_bracket_in_address));
 
 	// test address_to_bytes
 	TEST_EQUAL(address_to_bytes(address_v4::from_string("10.11.12.13")), "\x0a\x0b\x0c\x0d");
@@ -159,5 +160,12 @@ TORRENT_TEST(primitives)
 	// test endpoint_to_bytes
 	TEST_EQUAL(endpoint_to_bytes(udp::endpoint(address_v4::from_string("10.11.12.13"), 8080)), "\x0a\x0b\x0c\x0d\x1f\x90");
 	TEST_EQUAL(endpoint_to_bytes(udp::endpoint(address_v4::from_string("16.5.127.1"), 12345)), "\x10\x05\x7f\x01\x30\x39");
+
+	// test gen_fingerprint
+	TEST_EQUAL(generate_fingerprint("AB", 1, 2, 3, 4), "-AB1234-");
+	TEST_EQUAL(generate_fingerprint("AB", 1, 2), "-AB1200-");
+	TEST_EQUAL(generate_fingerprint("..", 1, 10), "-..1A00-");
+	TEST_EQUAL(generate_fingerprint("CZ", 1, 15), "-CZ1F00-");
+	TEST_EQUAL(generate_fingerprint("CZ", 1, 15, 16, 17), "-CZ1FGH-");
 }
 

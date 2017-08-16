@@ -74,6 +74,7 @@ udp_socket::udp_socket(io_service& ios)
 	, m_restart_v6(false)
 #endif
 	, m_socks5_sock(ios)
+	, m_retry_timer(ios)
 	, m_resolver(ios)
 	, m_queue_packets(false)
 	, m_tunnel_packets(false)
@@ -97,12 +98,17 @@ udp_socket::udp_socket(io_service& ios)
 
 	m_buf_size = 2048;
 	m_new_buf_size = m_buf_size;
-	m_buf = static_cast<char*>(malloc(m_buf_size));
+	m_buf = static_cast<char*>(std::malloc(m_buf_size));
 }
 
 udp_socket::~udp_socket()
 {
-	free(m_buf);
+	for (std::deque<queued_packet>::iterator i = m_queue.begin()
+		, end(m_queue.end()); i != end; ++i)
+	{
+		if (i->hostname) std::free(i->hostname);
+	}
+	std::free(m_buf);
 #if TORRENT_USE_IPV6
 	TORRENT_ASSERT_VAL(m_v6_outstanding == 0, m_v6_outstanding);
 #endif
@@ -741,7 +747,7 @@ void udp_socket::set_buf_size(int s)
 
 	if (no_mem)
 	{
-		free(m_buf);
+		std::free(m_buf);
 		m_buf = 0;
 		m_buf_size = 0;
 		m_new_buf_size = 0;
@@ -794,8 +800,9 @@ void udp_socket::bind(udp::endpoint const& ep, error_code& ec)
 		error_code err;
 #ifdef TORRENT_WINDOWS
 		m_ipv4_sock.set_option(exclusive_address_use(true), err);
-#endif
+#else
 		m_ipv4_sock.set_option(boost::asio::socket_base::reuse_address(true), err);
+#endif
 
 		m_ipv4_sock.bind(ep, ec);
 		if (ec) return;
@@ -820,8 +827,9 @@ void udp_socket::bind(udp::endpoint const& ep, error_code& ec)
 		error_code err;
 #ifdef TORRENT_WINDOWS
 		m_ipv6_sock.set_option(exclusive_address_use(true), err);
-#endif
+#else
 		m_ipv6_sock.set_option(boost::asio::socket_base::reuse_address(true), err);
+#endif
 		m_ipv6_sock.set_option(boost::asio::ip::v6_only(true), err);
 
 		m_ipv6_sock.bind(ep6, ec);
@@ -840,10 +848,14 @@ void udp_socket::bind(udp::endpoint const& ep, error_code& ec)
 		}
 	}
 #endif
+
+	error_code err;
+	m_bind_port = m_ipv4_sock.local_endpoint(err).port();
+	if (err) m_bind_port = ep.port();
+
 #if TORRENT_USE_ASSERTS
 	m_started = true;
 #endif
-	m_bind_port = ep.port();
 }
 
 void udp_socket::set_proxy_settings(aux::proxy_settings const& ps)
@@ -1453,7 +1465,15 @@ void udp_socket::hung_up(error_code const& e)
 
 	if (e == boost::asio::error::operation_aborted || m_abort) return;
 
-	// the socks connection was closed, re-open it
+	// the socks connection was closed, re-open it in a bit
+	m_retry_timer.expires_from_now(seconds(5));
+	m_retry_timer.async_wait(boost::bind(&udp_socket::retry_socks_connect
+		, this, _1));
+}
+
+void udp_socket::retry_socks_connect(error_code const& ec)
+{
+	if (ec) return;
 	set_proxy_settings(m_proxy_settings);
 }
 
@@ -1470,7 +1490,7 @@ void udp_socket::drain_queue()
 		{
 			udp_socket::send_hostname(p.hostname, p.ep.port(), &p.buf[0]
 				, p.buf.size(), ec, p.flags | dont_queue);
-			free(p.hostname);
+			std::free(p.hostname);
 		}
 		else
 		{

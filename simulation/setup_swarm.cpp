@@ -124,6 +124,7 @@ lt::torrent_status get_status(lt::session& ses)
 {
 	auto handles = ses.get_torrents();
 	TEST_EQUAL(handles.size(), 1);
+	if (handles.empty()) return lt::torrent_status();
 	auto h = handles[0];
 	return h.status();
 }
@@ -132,6 +133,7 @@ bool has_metadata(lt::session& ses)
 {
 	auto handles = ses.get_torrents();
 	TEST_EQUAL(handles.size(), 1);
+	if (handles.empty()) return false;
 	auto h = handles[0];
 	return h.status().has_metadata;
 }
@@ -140,6 +142,7 @@ bool is_seed(lt::session& ses)
 {
 	auto handles = ses.get_torrents();
 	TEST_EQUAL(handles.size(), 1);
+	if (handles.empty()) return false;
 	auto h = handles[0];
 	return h.status().is_seeding;
 }
@@ -148,6 +151,7 @@ int completed_pieces(lt::session& ses)
 {
 	auto handles = ses.get_torrents();
 	TEST_EQUAL(handles.size(), 1);
+	if (handles.empty()) return 0;
 	auto h = handles[0];
 	return h.status().num_pieces;
 }
@@ -364,9 +368,9 @@ void setup_swarm(int num_nodes
 		{
 			shut_down |= std::all_of(nodes.begin() + 1, nodes.end()
 				, [](boost::shared_ptr<lt::session> const& s)
-				{ return is_seed(*s); });
+				{ return is_seed(*s); }) && num_nodes > 1;
 
-			if (tick > 70 * (num_nodes - 1) && !shut_down)
+			if (tick > 70 * (num_nodes - 1) && !shut_down && num_nodes > 1)
 			{
 				TEST_ERROR("seeding failed!");
 			}

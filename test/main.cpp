@@ -45,6 +45,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/assert.hpp"
 #include "libtorrent/file.hpp"
+#include "libtorrent/aux_/escape_string.hpp"
 #include <signal.h>
 
 #ifdef WIN32
@@ -68,7 +69,8 @@ using namespace libtorrent;
 // out, such as the log
 int old_stdout = -1;
 int old_stderr = -1;
-bool redirect_output = true;
+bool redirect_stdout = true;
+bool redirect_stderr = false; // TODO: TEMPORARY!
 bool keep_files = false;
 
 extern int _g_test_idx;
@@ -79,7 +81,7 @@ unit_test_t* current_test = NULL;
 void output_test_log_to_terminal()
 {
 	if (current_test == NULL || old_stdout == -1 || old_stderr == -1
-		|| !redirect_output || current_test->output == NULL)
+		|| !redirect_stdout || current_test->output == NULL)
 		return;
 
 	fflush(stdout);
@@ -88,12 +90,12 @@ void output_test_log_to_terminal()
 	dup2(old_stderr, fileno(stderr));
 
 	fseek(current_test->output, 0, SEEK_SET);
-	fprintf(stderr, "\x1b[1m[%s]\x1b[0m\n\n", current_test->name);
+	fprintf(stdout, "\x1b[1m[%s]\x1b[0m\n\n", current_test->name);
 	char buf[4096];
 	int size = 0;
 	do {
 		size = fread(buf, 1, sizeof(buf), current_test->output);
-		if (size > 0) fwrite(buf, 1, size, stderr);
+		if (size > 0) fwrite(buf, 1, size, stdout);
 	} while (size > 0);
 }
 
@@ -205,17 +207,68 @@ void print_usage(char const* executable)
 	printf("%s [options] [tests...]\n"
 		"\n"
 		"OPTIONS:\n"
-		"-h,--help           show this help\n"
-		"-l,--list           list the tests available to run\n"
-		"-k,--keep           keep files created by the test\n"
-		"                    regardless of whether it passed or not\n"
-		"-n,--no-redirect    don't redirect test output to\n"
-		"                    temporary file, but let it go straight\n"
-		"                    to stdout\n"
+		"-h,--help            show this help\n"
+		"-l,--list            list the tests available to run\n"
+		"-k,--keep            keep files created by the test\n"
+		"                     regardless of whether it passed or not\n"
+		"-n,--no-redirect     don't redirect test output to\n"
+		"                     temporary file, but let it go straight\n"
+		"                     to stdout\n"
+		"--no-stderr-redirect don't redirect stderr, but still redirect\n"
+		"                     stdout. This is useful when building with\n"
+		"                     sanitizers, which rely on being able to print\n"
+		"                     to stderr and exit\n"
 		"\n"
 		"for tests, specify one or more test names as printed\n"
 		"by -l. If no test is specified, all tests are run\n", executable);
 }
+
+void change_directory(std::string const& f, error_code& ec)
+{
+	ec.clear();
+
+#ifdef TORRENT_WINDOWS
+#if TORRENT_USE_WSTRING
+#define SetCurrentDirectory_ SetCurrentDirectoryW
+	std::wstring n = convert_to_wstring(f);
+#else
+#define SetCurrentDirectory_ SetCurrentDirectoryA
+	std::string const& n = convert_to_native(f);
+#endif // TORRENT_USE_WSTRING
+
+	if (SetCurrentDirectory_(n.c_str()) == 0)
+		ec.assign(GetLastError(), system_category());
+#else
+	std::string n = convert_to_native(f);
+	int ret = ::chdir(n.c_str());
+	if (ret != 0)
+		ec.assign(errno, system_category());
+#endif
+}
+
+struct unit_directory_guard
+{
+	std::string dir;
+	unit_directory_guard(std::string const& d) : dir(d) {}
+	~unit_directory_guard()
+	{
+		error_code ec;
+		std::string parent_dir = parent_path(dir);
+		change_directory(parent_dir, ec); // windows will not allow to remove current dir, so let's change it to root
+		if (ec)
+		{
+			TEST_ERROR("Failed to change directory: " + ec.message());
+			return;
+		}
+		if (!keep_files)
+		{
+			error_code ec;
+			remove_all(dir, ec);
+			if (ec)
+				TEST_ERROR("Failed to remove unit test directory: " + ec.message());
+		}
+	}
+};
 
 EXPORT int main(int argc, char const* argv[])
 {
@@ -245,7 +298,13 @@ EXPORT int main(int argc, char const* argv[])
 
 		if (strcmp(argv[0], "-n") == 0 || strcmp(argv[0], "--no-redirect") == 0)
 		{
-			redirect_output = false;
+			redirect_stdout = false;
+			redirect_stderr = false;
+		}
+
+		if (strcmp(argv[0], "--no-stderr-redirect") == 0)
+		{
+			redirect_stderr = false;
 		}
 
 		if (strcmp(argv[0], "-k") == 0 || strcmp(argv[0], "--keep") == 0)
@@ -310,24 +369,11 @@ EXPORT int main(int argc, char const* argv[])
 #else
 	process_id = getpid();
 #endif
+	std::string root_dir = current_working_directory();
 	char dir[40];
 	snprintf(dir, sizeof(dir), "test_tmp_%u", process_id);
-	std::string test_dir = complete(dir);
-	error_code ec;
-	create_directory(test_dir, ec);
-	if (ec)
-	{
-		fprintf(stderr, "Failed to create test directory: %s\n", ec.message().c_str());
-		return 1;
-	}
-#ifdef TORRENT_WINDOWS
-	SetCurrentDirectoryA(dir);
-#else
-	chdir(dir);
-#endif
-	fprintf(stderr, "cwd = \"%s\"\n", test_dir.c_str());
-
-	int total_failures = 0;
+	std::string unit_dir_prefix = combine_path(root_dir, dir);
+	std::printf("cwd_prefix = \"%s\"\n", unit_dir_prefix.c_str());
 
 	if (_g_num_unit_tests == 0)
 	{
@@ -335,11 +381,8 @@ EXPORT int main(int argc, char const* argv[])
 		return 1;
 	}
 
-	if (redirect_output)
-	{
-		old_stdout = dup(fileno(stdout));
-		old_stderr = dup(fileno(stderr));
-	}
+	if (redirect_stdout) old_stdout = dup(fileno(stdout));
+	if (redirect_stderr) old_stderr = dup(fileno(stderr));
 
 	int num_run = 0;
 	for (int i = 0; i < _g_num_unit_tests; ++i)
@@ -347,9 +390,28 @@ EXPORT int main(int argc, char const* argv[])
 		if (filter && tests_to_run.count(_g_unit_tests[i].name) == 0)
 			continue;
 
+		std::string unit_dir = unit_dir_prefix;
+		char i_str[40];
+		snprintf(i_str, sizeof(i_str), "%u", i);
+		unit_dir.append(i_str);
+		error_code ec;
+		create_directory(unit_dir, ec);
+		if (ec)
+		{
+			std::printf("Failed to create unit test directory: %s\n", ec.message().c_str());
+			return 1;
+		}
+		unit_directory_guard unit_dir_guard(unit_dir);
+		change_directory(unit_dir, ec);
+		if (ec)
+		{
+			std::printf("Failed to change unit test directory: %s\n", ec.message().c_str());
+			return 1;
+		}
+
 		unit_test_t& t = _g_unit_tests[i];
 
-		if (redirect_output)
+		if (redirect_stdout)
 		{
 			// redirect test output to a temporary file
 			fflush(stdout);
@@ -359,7 +421,7 @@ EXPORT int main(int argc, char const* argv[])
 			if (f != NULL)
 			{
 				int ret1 = dup2(fileno(f), fileno(stdout));
-				dup2(fileno(f), fileno(stderr));
+				if (redirect_stderr) dup2(fileno(f), fileno(stderr));
 				if (ret1 >= 0)
 				{
 					t.output = f;
@@ -414,20 +476,14 @@ EXPORT int main(int argc, char const* argv[])
 
 		t.num_failures = _g_test_failures;
 		t.run = true;
-		total_failures += _g_test_failures;
 		++num_run;
 
-		if (redirect_output && t.output)
-		{
+		if (redirect_stdout && t.output)
 			fclose(t.output);
-		}
 	}
 
-	if (redirect_output)
-	{
-		dup2(old_stdout, fileno(stdout));
-		dup2(old_stderr, fileno(stderr));
-	}
+	if (redirect_stdout) dup2(old_stdout, fileno(stdout));
+	if (redirect_stderr) dup2(old_stderr, fileno(stderr));
 
 	if (!tests_to_run.empty())
 	{
@@ -453,22 +509,11 @@ EXPORT int main(int argc, char const* argv[])
 	stop_peer();
 	stop_dht();
 
-	if (redirect_output)
-	{
-		fflush(stdout);
-		fflush(stderr);
-	}
+	if (redirect_stdout) fflush(stdout);
+	if (redirect_stderr) fflush(stderr);
 
-	int ret = print_failures();
-#if !defined TORRENT_LOGGING
-	if (ret == 0 && !keep_files)
-	{
-		remove_all(test_dir, ec);
-		if (ec)
-			fprintf(stderr, "failed to remove test dir: %s\n", ec.message().c_str());
-	}
-#endif
+	int total_num_failures = print_failures();
 
-	return total_failures ? 333 : 0;
+	return total_num_failures ? 333 : 0;
 }
 

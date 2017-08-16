@@ -112,7 +112,7 @@ namespace libtorrent
 			optimize_alignment = 1,
 #ifndef TORRENT_NO_DEPRECATE
 			// same as optimize_alignment, for backwards compatibility
-			optimize = 1,
+			optimize TORRENT_DEPRECATED_ENUM = 1,
 #endif
 
 			// This will create a merkle hash tree torrent. A merkle torrent cannot
@@ -140,10 +140,10 @@ namespace libtorrent
 			symlinks = 8,
 
 			// to create a torrent that can be updated via a *mutable torrent*
-			// (see BEP38_). This also needs to be enabled for torrents that update
+			// (see `BEP 38`_). This also needs to be enabled for torrents that update
 			// another torrent.
 			// 
-			// .. _BEP38: http://www.bittorrent.org/beps/bep_0038.html
+			// .. _`BEP 38`: http://www.bittorrent.org/beps/bep_0038.html
 			mutable_torrent_support = 16
 		};
 
@@ -155,7 +155,7 @@ namespace libtorrent
 		// the specified number of bytes will be preceded by a pad file to align it
 		// with the start of a piece. The pad_file_limit is ignored unless the
 		// ``optimize_alignment`` flag is passed. Typically it doesn't make sense
-		// to set this any lower than 4kiB.
+		// to set this any lower than 4 kiB.
 		// 
 		// The overload that takes a ``torrent_info`` object will make a verbatim
 		// copy of its info dictionary (to preserve the info-hash). The copy of
@@ -170,10 +170,13 @@ namespace libtorrent
 		// ``alignment`` is used when pad files are enabled. This is the size
 		// eligible files are aligned to. The default is -1, which means the
 		// piece size of the torrent.
+		// The ``use_preformatted`` parameter can be set to true to preserve
+		// invalid encoding of the .torrent file.
 		create_torrent(file_storage& fs, int piece_size = 0
 			, int pad_file_limit = -1, int flags = optimize_alignment
 			, int alignment = -1);
 		create_torrent(torrent_info const& ti);
+		create_torrent(torrent_info const& ti, bool use_preformatted);
 
 		// internal
 		~create_torrent();
@@ -298,13 +301,15 @@ namespace libtorrent
 
 	private:
 
+		void load_from_torrent_info(torrent_info const& ti, bool const use_preformatted);
+
 		file_storage& m_files;
 		// if m_info_dict is initialized, it is
 		// used instead of m_files to generate
 		// the info dictionary
 		entry m_info_dict;
 
-		// the urls to the trackers
+		// the URLs to the trackers
 		typedef std::pair<std::string, int> announce_entry;
 		std::vector<announce_entry> m_urls;
 
@@ -350,7 +355,7 @@ namespace libtorrent
 
 		// this is used when creating a torrent. If there's
 		// only one file there are cases where it's impossible
-		// to know if it should be written as a multifile torrent
+		// to know if it should be written as a multi-file torrent
 		// or not. e.g. test/test  there's one file and one directory
 		// and they have the same name.
 		bool m_multifile:1;
@@ -438,16 +443,16 @@ namespace libtorrent
 	// and pass in utf8 strings
 #ifndef TORRENT_NO_DEPRECATE
 
-	TORRENT_DEPRECATED
-	TORRENT_EXPORT void add_files(file_storage& fs, std::wstring const& wfile
+	TORRENT_DEPRECATED_EXPORT
+	void add_files(file_storage& fs, std::wstring const& wfile
 		, boost::function<bool(std::string)> p, boost::uint32_t flags = 0);
 
-	TORRENT_DEPRECATED
-	TORRENT_EXPORT void add_files(file_storage& fs, std::wstring const& wfile
+	TORRENT_DEPRECATED_EXPORT
+	void add_files(file_storage& fs, std::wstring const& wfile
 		, boost::uint32_t flags = 0);
 	
-	TORRENT_DEPRECATED
-	TORRENT_EXPORT void set_piece_hashes(create_torrent& t, std::wstring const& p
+	TORRENT_DEPRECATED_EXPORT
+	void set_piece_hashes(create_torrent& t, std::wstring const& p
 		, boost::function<void(int)> f, error_code& ec);
 
 	TORRENT_EXPORT void set_piece_hashes_deprecated(create_torrent& t

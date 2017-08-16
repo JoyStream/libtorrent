@@ -61,7 +61,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent { namespace
 {
-	const char extension_name[] = "ut_pex";
+	static const char extension_name[] = "ut_pex";
 
 	enum
 	{
@@ -175,7 +175,7 @@ namespace libtorrent { namespace
 					// 0x04 - supports uTP. This is only a positive flags
 					//        passing 0 doesn't mean the peer doesn't
 					//        support uTP
-					// 0x08 - supports holepunching protocol. If this
+					// 0x08 - supports hole punching protocol. If this
 					//        flag is received from a peer, it can be
 					//        used as a rendezvous point in case direct
 					//        connections to the peer fail
@@ -564,7 +564,7 @@ namespace libtorrent { namespace
 				// 0x04 - supports uTP. This is only a positive flags
 				//        passing 0 doesn't mean the peer doesn't
 				//        support uTP
-				// 0x08 - supports holepunching protocol. If this
+				// 0x08 - supports hole punching protocol. If this
 				//        flag is received from a peer, it can be
 				//        used as a rendezvous point in case direct
 				//        connections to the peer fail

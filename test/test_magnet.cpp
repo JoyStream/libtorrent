@@ -146,6 +146,8 @@ TORRENT_TEST(magnet)
 
 	trackers = t2.trackers();
 	TEST_EQUAL(trackers.size(), 2);
+	TEST_EQUAL(trackers[0].tier, 0);
+	TEST_EQUAL(trackers[1].tier, 1);
 
 	p.url = "magnet:"
 		"?tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80"
@@ -162,16 +164,19 @@ TORRENT_TEST(magnet)
 	if (trackers.size() > 0)
 	{
 		TEST_EQUAL(trackers[0].url, "udp://tracker.openbittorrent.com:80");
+		TEST_EQUAL(trackers[0].tier, 0);
 		fprintf(stderr, "1: %s\n", trackers[0].url.c_str());
 	}
 	if (trackers.size() > 1)
 	{
 		TEST_EQUAL(trackers[1].url, "udp://tracker.publicbt.com:80");
+		TEST_EQUAL(trackers[1].tier, 1);
 		fprintf(stderr, "2: %s\n", trackers[1].url.c_str());
 	}
 	if (trackers.size() > 2)
 	{
 		TEST_EQUAL(trackers[2].url, "udp://tracker.ccc.de:80");
+		TEST_EQUAL(trackers[2].tier, 2);
 		fprintf(stderr, "3: %s\n", trackers[2].url.c_str());
 	}
 
@@ -388,5 +393,20 @@ TORRENT_TEST(make_magnet_uri2)
 	std::string magnet = make_magnet_uri(ti);
 	printf("%s len: %d\n", magnet.c_str(), int(magnet.size()));
 	TEST_CHECK(magnet.find("&ws=http%3a%2f%2ffoo.com%2fbar") != std::string::npos);
+}
+
+TORRENT_TEST(trailing_whitespace)
+{
+	session ses(settings());
+	add_torrent_params p;
+	p.save_path = ".";
+	p.url = "magnet:?xt=urn:btih:abaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
+	// invalid hash
+	TEST_THROW(ses.add_torrent(p));
+
+	p.url = "magnet:?xt=urn:btih:abaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	// now it's valid, because there's no trailing whitespace
+	torrent_handle h = ses.add_torrent(p);
+	TEST_CHECK(h.is_valid());
 }
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.6)
 project(libtorrent)
 set (SOVERSION "8")
-set (VERSION "1.1.1")
+set (VERSION "1.1.4")
 
 set(sources
 	web_connection_base
@@ -32,6 +32,7 @@ set(sources
 	escape_string
 	string_util
 	file
+	fingerprint
 	gzip
 	hasher
 	hex
@@ -175,7 +176,7 @@ if (NOT CMAKE_BUILD_TYPE)
 endif()
 
 # add_definitions() doesn't seem to let you say wich build type to apply it to
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -DTORRENT_DEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DTORRENT_DEBUG")
 if(UNIX)
 	set(CMAKE_C_FLAGS_RELWITHDEBINFO "-Os -g")
 	set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO}")

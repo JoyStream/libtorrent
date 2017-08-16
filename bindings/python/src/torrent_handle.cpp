@@ -12,6 +12,7 @@
 #include <libtorrent/peer_info.hpp>
 #include "libtorrent/announce_entry.hpp"
 #include <libtorrent/storage.hpp>
+#include <libtorrent/file_pool.hpp>
 #include <boost/lexical_cast.hpp>
 #include "gil.hpp"
 
@@ -190,12 +191,6 @@ void dict_to_announce_entry(dict d, announce_entry& ae)
       ae.tier = extract<int>(d["tier"]);
    if (d.has_key("fail_limit"))
       ae.fail_limit = extract<int>(d["fail_limit"]);
-   if (d.has_key("source"))
-      ae.source = extract<int>(d["source"]);
-   if (d.has_key("verified"))
-      ae.verified = extract<bool>(d["verified"]);
-   if (d.has_key("send_stats"))
-      ae.send_stats = extract<bool>(d["send_stats"]);
 }
 
 void replace_trackers(torrent_handle& h, object trackers)
@@ -236,6 +231,21 @@ void add_tracker(torrent_handle& h, dict d)
    h.add_tracker(ae);
 }
 
+namespace
+{
+#if defined BOOST_ASIO_HAS_STD_CHRONO
+   using std::chrono::system_clock;
+#else
+   using boost::chrono::system_clock;
+#endif
+
+   time_t to_ptime(time_point tpt)
+   {
+      return system_clock::to_time_t(system_clock::now()
+         + duration_cast<system_clock::duration>(tpt - clock_type::now()));
+   }
+}
+
 list trackers(torrent_handle& h)
 {
     list ret;
@@ -244,6 +254,27 @@ list trackers(torrent_handle& h)
     {
         dict d;
         d["url"] = i->url;
+        d["trackerid"] = i->trackerid;
+        d["message"] = i->message;
+        dict last_error;
+        last_error["value"] = i->last_error.value();
+        last_error["category"] = i->last_error.category().name();
+        d["last_error"] = last_error;
+        if (i->next_announce > min_time()) {
+           d["next_announce"] = to_ptime(i->next_announce);
+        }
+        else {
+           d["next_announce"] = object();
+        }
+        if (i->min_announce > min_time()) {
+           d["min_announce"] = to_ptime(i->min_announce);
+        }
+        else {
+           d["min_announce"] = object();
+        }
+        d["scrape_incomplete"] = i->scrape_incomplete;
+        d["scrape_complete"] = i->scrape_complete;
+        d["scrape_downloaded"] = i->scrape_downloaded;
         d["tier"] = i->tier;
         d["fail_limit"] = i->fail_limit;
         d["fails"] = i->fails;
@@ -312,6 +343,13 @@ namespace
 void connect_peer(torrent_handle& th, tuple ip, int source)
 {
     th.connect_peer(tuple_to_endpoint(ip), source);
+}
+
+std::vector<pool_file_status> file_status(torrent_handle const& h)
+{
+	std::vector<pool_file_status> ret;
+	h.file_status(ret);
+	return ret;
 }
 
 #ifndef TORRENT_NO_DEPRECATE
@@ -444,6 +482,7 @@ void bind_torrent_handle()
         .def("set_piece_deadline", _(&torrent_handle::set_piece_deadline)
             , (arg("index"), arg("deadline"), arg("flags") = 0))
         .def("reset_piece_deadline", _(&torrent_handle::reset_piece_deadline), (arg("index")))
+        .def("clear_piece_deadlines", _(&torrent_handle::clear_piece_deadlines), (arg("index")))
         .def("piece_availability", &piece_availability)
         .def("piece_priority", _(piece_priority0))
         .def("piece_priority", _(piece_priority1))
@@ -453,6 +492,7 @@ void bind_torrent_handle()
         .def("file_priorities", &file_priorities)
         .def("file_priority", &file_prioritity0)
         .def("file_priority", &file_prioritity1)
+        .def("file_status", &::file_status)
         .def("save_resume_data", _(&torrent_handle::save_resume_data), arg("flags") = 0)
         .def("need_save_resume_data", _(&torrent_handle::need_save_resume_data))
         .def("force_reannounce", _(force_reannounce0)
@@ -460,7 +500,7 @@ void bind_torrent_handle()
 #ifndef TORRENT_DISABLE_DHT
         .def("force_dht_announce", _(&torrent_handle::force_dht_announce))
 #endif
-        .def("scrape_tracker", _(&torrent_handle::scrape_tracker))
+        .def("scrape_tracker", _(&torrent_handle::scrape_tracker), arg("index") = -1)
         .def("set_upload_mode", _(&torrent_handle::set_upload_mode))
         .def("set_share_mode", _(&torrent_handle::set_share_mode))
         .def("flush_cache", &torrent_handle::flush_cache)
@@ -495,16 +535,27 @@ void bind_torrent_handle()
 #endif
         ;
 
+    class_<pool_file_status>("pool_file_status")
+       .def_readonly("file_index", &pool_file_status::file_index)
+       .def_readonly("last_use", &pool_file_status::last_use)
+       .def_readonly("open_mode", &pool_file_status::open_mode)
+    ;
+
     enum_<torrent_handle::file_progress_flags_t>("file_progress_flags")
         .value("piece_granularity", torrent_handle::piece_granularity)
     ;
 
+    enum_<torrent_handle::flags_t>("add_piece_flags_t")
+        .value("overwrite_existing", torrent_handle::overwrite_existing)
+    ;
     enum_<torrent_handle::pause_flags_t>("pause_flags_t")
         .value("graceful_pause", torrent_handle::graceful_pause)
     ;
 
     enum_<torrent_handle::save_resume_flags_t>("save_resume_flags_t")
         .value("flush_disk_cache", torrent_handle::flush_disk_cache)
+        .value("save_info_dict", torrent_handle::save_info_dict)
+        .value("only_if_modified", torrent_handle::only_if_modified)
     ;
 
     enum_<torrent_handle::deadline_flags>("deadline_flags")

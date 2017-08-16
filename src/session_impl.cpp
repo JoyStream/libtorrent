@@ -57,24 +57,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <valgrind/memcheck.h>
 #endif
 
-#if TORRENT_USE_RLIMIT
-
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wlong-long"
-#endif // __GNUC__
-
-#include <sys/resource.h>
-
-// capture this here where warnings are disabled (the macro generates warnings)
-const rlim_t rlim_infinity = RLIM_INFINITY;
-
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif // __GNUC__
-
-#endif // TORRENT_USE_RLIMIT
-
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 #include "libtorrent/aux_/openssl.hpp"
@@ -373,6 +355,7 @@ namespace aux {
 		, m_global_class(0)
 		, m_tcp_peer_class(0)
 		, m_local_peer_class(0)
+		, m_host_resolver(m_io_service)
 		, m_tracker_manager(m_udp_socket, m_stats_counters, m_host_resolver
 			, m_settings
 #if !defined TORRENT_DISABLE_LOGGING || TORRENT_USE_ASSERTS
@@ -386,7 +369,6 @@ namespace aux {
 #if TORRENT_USE_I2P
 		, m_i2p_conn(m_io_service)
 #endif
-		, m_socks_listen_port(0)
 		, m_interface_index(0)
 		, m_unchoke_time_scaler(0)
 		, m_auto_manage_time_scaler(0)
@@ -426,7 +408,7 @@ namespace aux {
 		, m_boost_connections(0)
 		, m_timer(m_io_service)
 		, m_lsd_announce_timer(m_io_service)
-		, m_host_resolver(m_io_service)
+		, m_close_file_timer(m_io_service)
 		, m_next_downloading_connect_torrent(0)
 		, m_next_finished_connect_torrent(0)
 		, m_download_connect_attempts(0)
@@ -537,13 +519,13 @@ namespace aux {
 #endif // TORRENT_DISABLE_LOGGING
 
 		// ---- auto-cap max connections ----
-		int max_files = max_open_files();
+		int const max_files = max_open_files();
 		// deduct some margin for epoll/kqueue, log files,
 		// futexes, shared objects etc.
 		// 80% of the available file descriptors should go to connections
-		m_settings.set_int(settings_pack::connections_limit, (std::min)(
+		m_settings.set_int(settings_pack::connections_limit, std::min(
 			m_settings.get_int(settings_pack::connections_limit)
-			, (std::max)(5, (max_files - 20) * 8 / 10)));
+			, std::max(5, (max_files - 20) * 8 / 10)));
 		// 20% goes towards regular files (see disk_io_thread)
 #ifndef TORRENT_DISABLE_LOGGING
 		session_log("   max connections: %d", m_settings.get_int(settings_pack::connections_limit));
@@ -558,6 +540,7 @@ namespace aux {
 
 	void session_impl::init(boost::shared_ptr<settings_pack> pack)
 	{
+		INVARIANT_CHECK;
 		// this is a debug facility
 		// see single_threaded in debug.hpp
 		thread_started();
@@ -565,7 +548,8 @@ namespace aux {
 		TORRENT_ASSERT(is_single_thread());
 
 #ifndef TORRENT_DISABLE_LOGGING
-		if (m_alerts.should_post<log_alert>())
+		if (m_alerts.should_post<log_alert>()
+			|| m_alerts.should_post<session_stats_alert>())
 		{
 			session_log(" *** session thread init");
 
@@ -907,6 +891,12 @@ namespace aux {
 			{
 				// apply_settings_pack will update dht and proxy
 				boost::shared_ptr<settings_pack> pack = load_pack_from_dict(settings);
+
+				// these settings are not loaded from state
+				// they are set by the client software, not configured by users
+				pack->clear(settings_pack::user_agent);
+				pack->clear(settings_pack::peer_fingerprint);
+
 				apply_settings_pack(pack);
 #ifndef TORRENT_DISABLE_DHT
 				need_update_dht = false;
@@ -1086,6 +1076,8 @@ namespace aux {
 		// about to send event=stopped to
 		m_host_resolver.abort();
 
+		m_close_file_timer.cancel();
+
 		// abort the main thread
 		m_abort = true;
 		error_code ec;
@@ -1117,12 +1109,6 @@ namespace aux {
 			TORRENT_ASSERT(!ec);
 		}
 		m_listen_sockets.clear();
-		if (m_socks_listen_socket && m_socks_listen_socket->is_open())
-		{
-			m_socks_listen_socket->close(ec);
-			TORRENT_ASSERT(!ec);
-		}
-		m_socks_listen_socket.reset();
 
 #if TORRENT_USE_I2P
 		if (m_i2p_listen_socket && m_i2p_listen_socket->is_open())
@@ -1649,6 +1635,7 @@ namespace aux {
 	// session_impl is responsible for deleting 'pack'
 	void session_impl::apply_settings_pack(boost::shared_ptr<settings_pack> pack)
 	{
+		INVARIANT_CHECK;
 		apply_settings_pack_impl(*pack);
 	}
 
@@ -1685,6 +1672,7 @@ namespace aux {
 					!= m_settings.get_str(settings_pack::listen_interfaces));
 
 		apply_pack(&pack, m_settings, this);
+
 		m_disk_thread.set_settings(&pack, m_alerts);
 
 		if (reopen_listen_port)
@@ -1699,8 +1687,8 @@ namespace aux {
 	{
 		INVARIANT_CHECK;
 		TORRENT_ASSERT(is_single_thread());
-		boost::shared_ptr<settings_pack> p = load_pack_from_struct(m_settings, s);
-		apply_settings_pack(p);
+		settings_pack p = load_pack_from_struct(m_settings, s);
+		apply_settings_pack_impl(p);
 	}
 
 	libtorrent::session_settings session_impl::deprecated_settings() const
@@ -1755,8 +1743,9 @@ namespace aux {
 			error_code err;
 #ifdef TORRENT_WINDOWS
 			ret.sock->set_option(exclusive_address_use(true), err);
-#endif
+#else
 			ret.sock->set_option(tcp::acceptor::reuse_address(true), err);
+#endif
 		}
 
 #if TORRENT_USE_IPV6
@@ -2109,6 +2098,7 @@ retry:
 					maybe_update_udp_mapping(0, true, ssl_port, ssl_port);
 					maybe_update_udp_mapping(1, true, ssl_port, ssl_port);
 				}
+				m_ssl_udp_socket.set_proxy_settings(proxy());
 			}
 		}
 		else
@@ -2170,6 +2160,8 @@ retry:
 				maybe_update_udp_mapping(0, false, m_listen_interface.port(), m_listen_interface.port());
 				maybe_update_udp_mapping(1, false, m_listen_interface.port(), m_listen_interface.port());
 			}
+
+			m_udp_socket.set_proxy_settings(proxy());
 		}
 
 		// we made it! now post all the listen_succeeded_alerts
@@ -2225,7 +2217,6 @@ retry:
 			, end(m_listen_sockets.end()); i != end; ++i)
 			async_accept(i->sock, i->ssl);
 
-		open_new_incoming_socks_connection();
 #if TORRENT_USE_I2P
 		open_new_incoming_i2p_connection();
 #endif
@@ -2259,7 +2250,8 @@ retry:
 		if ((mask & 2) && m_upnp)
 		{
 			if (m_tcp_mapping[1] != -1) m_upnp->delete_mapping(m_tcp_mapping[1]);
-			m_tcp_mapping[1] = m_upnp->add_mapping(upnp::tcp, tcp_port, tcp_port);
+			m_tcp_mapping[1] = m_upnp->add_mapping(upnp::tcp, tcp_port
+				, tcp::endpoint(m_listen_interface.address(), tcp_port));
 #ifdef TORRENT_USE_OPENSSL
 			if (m_ssl_tcp_mapping[1] != -1)
 			{
@@ -2267,96 +2259,9 @@ retry:
 				m_ssl_tcp_mapping[1] = -1;
 			}
 			if (ssl_port > 0) m_ssl_tcp_mapping[1] = m_upnp->add_mapping(upnp::tcp
-				, ssl_port, ssl_port);
+				, ssl_port, tcp::endpoint(m_listen_interface.address(), ssl_port));
 #endif
 		}
-	}
-
-	void session_impl::open_new_incoming_socks_connection()
-	{
-		int const proxy_type = m_settings.get_int(settings_pack::proxy_type);
-
-		if (proxy_type != settings_pack::socks5
-			&& proxy_type != settings_pack::socks5_pw
-			&& proxy_type != settings_pack::socks4)
-			return;
-
-		if (m_socks_listen_socket) return;
-
-		m_socks_listen_socket = boost::make_shared<socket_type>(boost::ref(m_io_service));
-		bool const ret = instantiate_connection(m_io_service, proxy()
-			, *m_socks_listen_socket, NULL, NULL, false, false);
-		TORRENT_ASSERT_VAL(ret, ret);
-		TORRENT_UNUSED(ret);
-
-#if defined TORRENT_ASIO_DEBUGGING
-		add_outstanding_async("session_impl::on_socks_listen");
-#endif
-		socks5_stream& s = *m_socks_listen_socket->get<socks5_stream>();
-
-		m_socks_listen_port = m_listen_interface.port();
-		if (m_socks_listen_port == 0) m_socks_listen_port = 2000 + random() % 60000;
-		s.async_listen(tcp::endpoint(address_v4::any(), m_socks_listen_port)
-			, boost::bind(&session_impl::on_socks_listen, this
-				, m_socks_listen_socket, _1));
-	}
-
-	void session_impl::on_socks_listen(boost::shared_ptr<socket_type> const& sock
-		, error_code const& e)
-	{
-#if defined TORRENT_ASIO_DEBUGGING
-		complete_async("session_impl::on_socks_listen");
-#endif
-
-		TORRENT_ASSERT(sock == m_socks_listen_socket || !m_socks_listen_socket);
-
-		if (e)
-		{
-			m_socks_listen_socket.reset();
-			if (e == boost::asio::error::operation_aborted) return;
-			if (m_alerts.should_post<listen_failed_alert>())
-				m_alerts.emplace_alert<listen_failed_alert>("socks5"
-					, -1, listen_failed_alert::accept, e
-					, listen_failed_alert::socks5);
-			return;
-		}
-
-		error_code ec;
-		tcp::endpoint ep = sock->local_endpoint(ec);
-		TORRENT_ASSERT(!ec);
-		TORRENT_UNUSED(ec);
-
-		if (m_alerts.should_post<listen_succeeded_alert>())
-			m_alerts.emplace_alert<listen_succeeded_alert>(
-				ep, listen_succeeded_alert::socks5);
-
-#if defined TORRENT_ASIO_DEBUGGING
-		add_outstanding_async("session_impl::on_socks_accept");
-#endif
-		socks5_stream& s = *m_socks_listen_socket->get<socks5_stream>();
-		s.async_accept(boost::bind(&session_impl::on_socks_accept, this
-				, m_socks_listen_socket, _1));
-	}
-
-	void session_impl::on_socks_accept(boost::shared_ptr<socket_type> const& s
-		, error_code const& e)
-	{
-#if defined TORRENT_ASIO_DEBUGGING
-		complete_async("session_impl::on_socks_accept");
-#endif
-		TORRENT_ASSERT(s == m_socks_listen_socket || !m_socks_listen_socket);
-		m_socks_listen_socket.reset();
-		if (e == boost::asio::error::operation_aborted) return;
-		if (e)
-		{
-			if (m_alerts.should_post<listen_failed_alert>())
-				m_alerts.emplace_alert<listen_failed_alert>("socks5"
-					, -1, listen_failed_alert::accept, e
-					, listen_failed_alert::socks5);
-			return;
-		}
-		open_new_incoming_socks_connection();
-		incoming_connection(s);
 	}
 
 	void session_impl::update_i2p_bridge()
@@ -2578,7 +2483,8 @@ retry:
 						i->second->disconnect_peers(1, e);
 					}
 
-					m_settings.set_int(settings_pack::connections_limit, m_connections.size());
+					m_settings.set_int(settings_pack::connections_limit
+						, std::max(10, int(m_connections.size())));
 				}
 				// try again, but still alert the user of the problem
 				async_accept(listener, ssl);
@@ -2829,7 +2735,7 @@ retry:
 			{
 				m_alerts.emplace_alert<peer_disconnected_alert>(torrent_handle(), endp, peer_id()
 						, op_bittorrent, s->type()
-						, error_code(errors::too_many_connections, get_libtorrent_category())
+						, error_code(errors::too_many_connections)
 						, close_no_reason);
 			}
 #ifndef TORRENT_DISABLE_LOGGING
@@ -3011,6 +2917,7 @@ retry:
 		peer_class* pc = m_classes.at(c);
 		if (pc == 0) return;
 		if (limit <= 0) limit = 0;
+		else limit = std::min(limit, std::numeric_limits<int>::max() - 1);
 		pc->channel[channel].throttle(limit);
 	}
 
@@ -3064,16 +2971,39 @@ retry:
 
 	void session_impl::trancieve_ip_packet(int bytes, bool ipv6)
 	{
+		// one TCP/IP packet header for the packet
+		// sent or received, and one for the ACK
+		// The IPv4 header is 20 bytes
+		// and IPv6 header is 40 bytes
+		int const header = (ipv6 ? 40 : 20) + 20;
+		int const mtu = 1500;
+		int const packet_size = mtu - header;
+		int const overhead = std::max(1, (bytes + packet_size - 1) / packet_size) * header;
+		m_stats_counters.inc_stats_counter(counters::sent_ip_overhead_bytes
+			, overhead);
+		m_stats_counters.inc_stats_counter(counters::recv_ip_overhead_bytes
+			, overhead);
+
 		m_stat.trancieve_ip_packet(bytes, ipv6);
 	}
 
 	void session_impl::sent_syn(bool ipv6)
 	{
+		int const overhead = ipv6 ? 60 : 40;
+		m_stats_counters.inc_stats_counter(counters::sent_ip_overhead_bytes
+			, overhead);
+
 		m_stat.sent_syn(ipv6);
 	}
 
 	void session_impl::received_synack(bool ipv6)
 	{
+		int const overhead = ipv6 ? 60 : 40;
+		m_stats_counters.inc_stats_counter(counters::sent_ip_overhead_bytes
+			, overhead);
+		m_stats_counters.inc_stats_counter(counters::recv_ip_overhead_bytes
+			, overhead);
+
 		m_stat.received_synack(ipv6);
 	}
 
@@ -3268,7 +3198,6 @@ retry:
 		if (!m_paused) m_auto_manage_time_scaler--;
 		if (m_auto_manage_time_scaler < 0)
 		{
-			INVARIANT_CHECK;
 			m_auto_manage_time_scaler = settings().get_int(settings_pack::auto_manage_interval);
 			recalculate_auto_managed_torrents();
 		}
@@ -3496,7 +3425,7 @@ retry:
 						int(i->second->num_peers() * m_settings.get_int(settings_pack::peer_turnover) / 100), 1)
 						, i->second->num_connect_candidates());
 					i->second->disconnect_peers(peers_to_disconnect
-						, error_code(errors::optimistic_disconnect, get_libtorrent_category()));
+						, error_code(errors::optimistic_disconnect));
 				}
 				else
 				{
@@ -3518,7 +3447,7 @@ retry:
 							* m_settings.get_int(settings_pack::peer_turnover) / 100), 1)
 							, t->num_connect_candidates());
 						t->disconnect_peers(peers_to_disconnect
-							, error_code(errors::optimistic_disconnect, get_libtorrent_category()));
+							, error_code(errors::optimistic_disconnect));
 					}
 				}
 			}
@@ -3526,6 +3455,16 @@ retry:
 
 		m_tick_residual = m_tick_residual % 1000;
 //		m_peer_pool.release_memory();
+	}
+
+	void session_impl::on_close_file(error_code const& e)
+	{
+		if (e) return;
+
+		m_disk_thread.files().close_oldest();
+
+		// re-issue the timer
+		update_close_file_interval();
 	}
 
 	namespace {
@@ -3759,6 +3698,7 @@ retry:
 			else
 			{
 				t->resume();
+				if (!t->should_check_files()) continue;
 				t->start_checking();
 				--limit;
 			}
@@ -4113,8 +4053,9 @@ retry:
 		// TODO: use a lower limit than m_settings.connections_limit
 		// to allocate the to 10% or so of connection slots for incoming
 		// connections
-		int limit = m_settings.get_int(settings_pack::connections_limit)
-			- num_connections();
+		// cap this at max - 1, since we may add one below
+		int const limit = std::min(m_settings.get_int(settings_pack::connections_limit)
+			- num_connections(), std::numeric_limits<int>::max() - 1);
 
 		// this logic is here to smooth out the number of new connection
 		// attempts over time, to prevent connecting a large number of
@@ -4196,9 +4137,8 @@ retry:
 				// we ran out of memory trying to connect to a peer
 				// lower the global limit to the number of peers
 				// we already have
-				m_settings.set_int(settings_pack::connections_limit, num_connections());
-				if (m_settings.get_int(settings_pack::connections_limit) < 2)
-					m_settings.set_int(settings_pack::connections_limit, 2);
+				m_settings.set_int(settings_pack::connections_limit
+					, std::max(2, num_connections()));
 			}
 
 			++steps_since_last_connect;
@@ -4687,12 +4627,6 @@ retry:
 			m_dht->update_stats_counters(m_stats_counters);
 #endif
 
-		m_stats_counters.set_value(counters::sent_ip_overhead_bytes
-			, m_stat.total_transfer(stat::upload_ip_protocol));
-
-		m_stats_counters.set_value(counters::recv_ip_overhead_bytes
-			, m_stat.total_transfer(stat::download_ip_protocol));
-
 		m_stats_counters.set_value(counters::limiter_up_queue
 			, m_upload_rate.queue_size());
 		m_stats_counters.set_value(counters::limiter_down_queue
@@ -4766,6 +4700,8 @@ retry:
 		{
 			params->url.clear();
 			params->ti = boost::shared_ptr<torrent_info>(j->buffer.torrent_file);
+			TORRENT_ASSERT(params->ti->is_valid());
+			TORRENT_ASSERT(params->ti->num_files() > 0);
 			handle = add_torrent(*params, ec);
 		}
 
@@ -4827,8 +4763,10 @@ retry:
 		}
 #endif
 
+#ifndef TORRENT_NO_DEPRECATE
 		if (m_alerts.should_post<torrent_added_alert>())
 			m_alerts.emplace_alert<torrent_added_alert>(handle);
+#endif
 
 		// if this was an existing torrent, we can't start it again, or add
 		// another set of plugins etc. we're done
@@ -5116,7 +5054,6 @@ retry:
 
 	void session_impl::update_outgoing_interfaces()
 	{
-		INVARIANT_CHECK;
 		std::string net_interfaces = m_settings.get_str(settings_pack::outgoing_interfaces);
 
 		// declared in string_util.hpp
@@ -5131,8 +5068,9 @@ retry:
 		{
 #ifdef TORRENT_WINDOWS
 			s.set_option(exclusive_address_use(true), ec);
-#endif
+#else
 			s.set_option(tcp::acceptor::reuse_address(true), ec);
+#endif
 			// ignore errors because the underlying socket may not
 			// be opened yet. This happens when we're routing through
 			// a proxy. In that case, we don't yet know the address of
@@ -5311,7 +5249,6 @@ retry:
 
 	void session_impl::update_listen_interfaces()
 	{
-		INVARIANT_CHECK;
 
 		std::string net_interfaces = m_settings.get_str(settings_pack::listen_interfaces);
 		std::vector<std::pair<std::string, int> > new_listen_interfaces;
@@ -5423,11 +5360,21 @@ retry:
 		}
 	}
 
+	void session_impl::update_close_file_interval()
+	{
+		int const interval = m_settings.get_int(settings_pack::close_file_interval);
+		if (interval == 0 || m_abort)
+		{
+			m_close_file_timer.cancel();
+			return;
+		}
+		error_code ec;
+		m_close_file_timer.expires_from_now(seconds(interval), ec);
+		m_close_file_timer.async_wait(make_tick_handler(boost::bind(&session_impl::on_close_file, this, _1)));
+	}
+
 	void session_impl::update_proxy()
 	{
-		// in case we just set a socks proxy, we might have to
-		// open the socks incoming connection
-		if (!m_socks_listen_socket) open_new_incoming_socks_connection();
 		m_udp_socket.set_proxy_settings(proxy());
 
 #ifdef TORRENT_USE_OPENSSL
@@ -5519,12 +5466,6 @@ retry:
 
 	boost::uint16_t session_impl::listen_port() const
 	{
-		// if peer connections are set up to be received over a socks
-		// proxy, and it's the same one as we're using for the tracker
-		// just tell the tracker the socks5 port we're listening on
-		if (m_socks_listen_socket && m_socks_listen_socket->is_open())
-			return m_socks_listen_socket->local_endpoint().port();
-
 		// if not, don't tell the tracker anything if we're in force_proxy
 		// mode. We don't want to leak our listen port since it can
 		// potentially identify us if it is leaked elsewere
@@ -5536,12 +5477,6 @@ retry:
 	boost::uint16_t session_impl::ssl_listen_port() const
 	{
 #ifdef TORRENT_USE_OPENSSL
-		// if peer connections are set up to be received over a socks
-		// proxy, and it's the same one as we're using for the tracker
-		// just tell the tracker the socks5 port we're listening on
-		if (m_socks_listen_socket && m_socks_listen_socket->is_open())
-			return m_socks_listen_port;
-
 		// if not, don't tell the tracker anything if we're in force_proxy
 		// mode. We don't want to leak our listen port since it can
 		// potentially identify us if it is leaked elsewere
@@ -5715,9 +5650,9 @@ retry:
 
 		// IP-overhead
 		s.ip_overhead_download_rate = m_stat.transfer_rate(stat::download_ip_protocol);
-		s.total_ip_overhead_download = m_stat.total_transfer(stat::download_ip_protocol);
+		s.total_ip_overhead_download = m_stats_counters[counters::recv_ip_overhead_bytes];
 		s.ip_overhead_upload_rate = m_stat.transfer_rate(stat::upload_ip_protocol);
-		s.total_ip_overhead_upload = m_stat.total_transfer(stat::upload_ip_protocol);
+		s.total_ip_overhead_upload = m_stats_counters[counters::sent_ip_overhead_bytes];
 
 		// tracker
 		s.total_tracker_download = m_stats_counters[counters::recv_tracker_bytes];
@@ -5804,6 +5739,8 @@ retry:
 
 		// postpone starting the DHT if we're still resolving the DHT router
 		if (m_outstanding_router_lookups > 0) return;
+		if (m_abort) return;
+
 		if (m_abort) return;
 
 		m_dht = boost::make_shared<dht::dht_tracker>(static_cast<dht_observer*>(this)
@@ -6059,7 +5996,8 @@ retry:
 	void session_impl::maybe_update_udp_mapping(int const nat, bool const ssl
 		, int const local_port, int const external_port)
 	{
-		int local, external, protocol;
+		int external, protocol;
+		tcp::endpoint local_ep;
 #ifdef TORRENT_USE_OPENSSL
 		int* mapping = ssl ? m_ssl_udp_mapping : m_udp_mapping;
 #else
@@ -6068,6 +6006,7 @@ retry:
 #endif
 		if (nat == 0 && m_natpmp)
 		{
+			int local = 0;
 			if (mapping[nat] != -1)
 			{
 				if (m_natpmp->get_mapping(mapping[nat], local, external, protocol))
@@ -6079,23 +6018,24 @@ retry:
 				m_natpmp->delete_mapping(mapping[nat]);
 			}
 			mapping[nat] = m_natpmp->add_mapping(natpmp::udp
-				, local_port, external_port);
+				, external_port, local_port);
 			return;
 		}
 		else if (nat == 1 && m_upnp)
 		{
 			if (mapping[nat] != -1)
 			{
-				if (m_upnp->get_mapping(mapping[nat], local, external, protocol))
+				if (m_upnp->get_mapping(mapping[nat], local_ep, external, protocol))
 				{
 					// we already have a mapping. If it's the same, don't do anything
-					if (local == local_port && external == external_port && protocol == natpmp::udp)
+					if (local_ep.port() == local_port && external == external_port && protocol == natpmp::udp)
 						return;
 				}
 				m_upnp->delete_mapping(mapping[nat]);
 			}
+			local_ep.port(local_port);
 			mapping[nat] = m_upnp->add_mapping(upnp::udp
-				, local_port, external_port);
+				, external_port, local_ep);
 			return;
 		}
 	}
@@ -6187,6 +6127,7 @@ retry:
 
 	void session_impl::set_local_download_rate_limit(int bytes_per_second)
 	{
+		INVARIANT_CHECK;
 		settings_pack p;
 		p.set_int(settings_pack::local_download_rate_limit, bytes_per_second);
 		apply_settings_pack_impl(p);
@@ -6194,6 +6135,7 @@ retry:
 
 	void session_impl::set_local_upload_rate_limit(int bytes_per_second)
 	{
+		INVARIANT_CHECK;
 		settings_pack p;
 		p.set_int(settings_pack::local_upload_rate_limit, bytes_per_second);
 		apply_settings_pack_impl(p);
@@ -6201,6 +6143,7 @@ retry:
 
 	void session_impl::set_download_rate_limit(int bytes_per_second)
 	{
+		INVARIANT_CHECK;
 		settings_pack p;
 		p.set_int(settings_pack::download_rate_limit, bytes_per_second);
 		apply_settings_pack_impl(p);
@@ -6208,6 +6151,7 @@ retry:
 
 	void session_impl::set_upload_rate_limit(int bytes_per_second)
 	{
+		INVARIANT_CHECK;
 		settings_pack p;
 		p.set_int(settings_pack::upload_rate_limit, bytes_per_second);
 		apply_settings_pack_impl(p);
@@ -6215,6 +6159,7 @@ retry:
 
 	void session_impl::set_max_connections(int limit)
 	{
+		INVARIANT_CHECK;
 		settings_pack p;
 		p.set_int(settings_pack::connections_limit, limit);
 		apply_settings_pack_impl(p);
@@ -6222,6 +6167,7 @@ retry:
 
 	void session_impl::set_max_uploads(int limit)
 	{
+		INVARIANT_CHECK;
 		settings_pack p;
 		p.set_int(settings_pack::unchoke_slots_limit, limit);
 		apply_settings_pack_impl(p);
@@ -6502,9 +6448,14 @@ retry:
 
 	void session_impl::update_anonymous_mode()
 	{
-		if (!m_settings.get_bool(settings_pack::anonymous_mode)) return;
+		if (!m_settings.get_bool(settings_pack::anonymous_mode))
+		{
+			if (m_upnp)
+				m_upnp->set_user_agent(m_settings.get_str(settings_pack::user_agent));
+			return;
+		}
 
-		m_settings.set_str(settings_pack::user_agent, "");
+		if (m_upnp) m_upnp->set_user_agent("");
 		url_random(m_peer_id.data(), m_peer_id.data() + 20);
 	}
 
@@ -6571,11 +6522,7 @@ retry:
 	{
 		int limit = m_settings.get_int(settings_pack::connections_limit);
 
-		if (limit <= 0)
-			limit = (std::numeric_limits<int>::max)();
-
-		limit = (std::max)(5, (std::min)(limit
-				, max_open_files() - 20 - m_settings.get_int(settings_pack::file_pool_size)));
+		if (limit <= 0) limit = max_open_files();
 
 		m_settings.set_int(settings_pack::connections_limit, limit);
 
@@ -6632,8 +6579,7 @@ retry:
 
 				int disconnect = (std::min)(to_disconnect, num - my_average);
 				to_disconnect -= disconnect;
-				i->second->disconnect_peers(disconnect
-					, error_code(errors::too_many_connections, get_libtorrent_category()));
+				i->second->disconnect_peers(disconnect, errors::too_many_connections);
 			}
 		}
 	}
@@ -6826,7 +6772,8 @@ retry:
 		// the upnp constructor may fail and call the callbacks
 		m_upnp = boost::make_shared<upnp>(boost::ref(m_io_service)
 			, m_listen_interface.address()
-			, m_settings.get_str(settings_pack::user_agent)
+			, m_settings.get_bool(settings_pack::anonymous_mode)
+				? "" : m_settings.get_str(settings_pack::user_agent)
 			, boost::bind(&session_impl::on_port_mapping
 				, this, _1, _2, _3, _4, _5, 1)
 			, boost::bind(&session_impl::on_port_map_log
@@ -6844,13 +6791,13 @@ retry:
 		if (m_udp_socket.is_open())
 		{
 			m_udp_mapping[1] = m_upnp->add_mapping(upnp::udp
-				, m_listen_interface.port(), m_listen_interface.port());
+				, m_listen_interface.port(), m_listen_interface);
 		}
 #ifdef TORRENT_USE_OPENSSL
 		if (m_ssl_udp_socket.is_open() && ssl_port > 0)
 		{
 			m_ssl_udp_mapping[1] = m_upnp->add_mapping(upnp::udp
-				, ssl_port, ssl_port);
+				, ssl_port, tcp::endpoint(m_listen_interface.address(), ssl_port));
 		}
 #endif
 		return m_upnp.get();
@@ -6861,9 +6808,9 @@ retry:
 	{
 		int ret = 0;
 		if (m_upnp) ret = m_upnp->add_mapping(static_cast<upnp::protocol_type>(t), external_port
-			, local_port);
-		if (m_natpmp) ret = m_natpmp->add_mapping(static_cast<natpmp::protocol_type>(t), external_port
-			, local_port);
+			, tcp::endpoint(m_listen_interface.address(), local_port));
+		if (m_natpmp) ret = m_natpmp->add_mapping(static_cast<natpmp::protocol_type>(t)
+			, external_port, local_port);
 		return ret;
 	}
 
@@ -7080,7 +7027,9 @@ retry:
 		TORRENT_ASSERT(is_single_thread());
 
 		int loaded_limit = m_settings.get_int(settings_pack::active_loaded_limit);
-		TORRENT_ASSERT(m_num_save_resume <= loaded_limit);
+		TORRENT_ASSERT(loaded_limit == 0
+			|| !m_user_load_torrent
+			|| m_num_save_resume <= loaded_limit);
 //		if (m_num_save_resume < loaded_limit)
 //			TORRENT_ASSERT(m_save_resume_queue.empty());
 

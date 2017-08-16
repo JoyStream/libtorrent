@@ -108,143 +108,6 @@ void run_test(Setup const& setup
 	test(sim, *ses, params.ti);
 }
 
-TORRENT_TEST(socks5_tcp_accept)
-{
-	using namespace libtorrent;
-	bool incoming_connection = false;
-	run_test(
-		[](lt::session& ses)
-		{
-			set_proxy(ses, settings_pack::socks5);
-		},
-		[&](lt::session& ses, lt::alert const* alert) {
-			if (auto* a = lt::alert_cast<lt::incoming_connection_alert>(alert))
-			{
-				TEST_EQUAL(a->socket_type, 2);
-				incoming_connection = true;
-			}
-		},
-		[](sim::simulation& sim, lt::session& ses
-			, boost::shared_ptr<lt::torrent_info> ti)
-		{
-			// test connecting to the client via its socks5 listen port
-		// TODO: maybe we could use peer_conn here instead
-			fake_peer peer1(sim, "60.0.0.0");
-			fake_peer peer2(sim, "60.0.0.1");
-
-			sim::timer t1(sim, lt::seconds(2), [&](boost::system::error_code const& ec)
-			{
-				peer1.connect_to(tcp::endpoint(addr("50.50.50.50"), 6881), ti->info_hash());
-			});
-
-			sim::timer t2(sim, lt::seconds(3), [&](boost::system::error_code const& ec)
-			{
-				peer2.connect_to(tcp::endpoint(addr("50.50.50.50"), 6881), ti->info_hash());
-			});
-
-			sim.run();
-		}
-	);
-
-	TEST_EQUAL(incoming_connection, true);
-}
-
-TORRENT_TEST(socks4_tcp_accept)
-{
-	using namespace libtorrent;
-	bool incoming_connection = false;
-	run_test(
-		[](lt::session& ses)
-		{
-			set_proxy(ses, settings_pack::socks4);
-		},
-		[&](lt::session& ses, lt::alert const* alert) {
-			if (auto* a = lt::alert_cast<lt::incoming_connection_alert>(alert))
-			{
-				TEST_EQUAL(a->socket_type, 2);
-				TEST_EQUAL(a->ip.address(), addr("60.0.0.0"))
-				incoming_connection = true;
-			}
-		},
-		[](sim::simulation& sim, lt::session& ses
-			, boost::shared_ptr<lt::torrent_info> ti)
-		{
-			fake_peer peer1(sim, "60.0.0.0");
-
-			sim::timer t1(sim, lt::seconds(2), [&](boost::system::error_code const& ec)
-			{
-				peer1.connect_to(tcp::endpoint(addr("50.50.50.50"), 6881), ti->info_hash());
-			});
-
-			sim.run();
-		}
-	);
-
-	TEST_EQUAL(incoming_connection, true);
-}
-
-// make sure a listen_succeeded_alert is issued when successfully listening on
-// incoming connections via a socks5 proxy
-TORRENT_TEST(socks4_tcp_listen_alert)
-{
-	using namespace libtorrent;
-	bool listen_alert = false;
-	run_test(
-		[](lt::session& ses)
-		{
-			set_proxy(ses, settings_pack::socks4);
-		},
-		[&](lt::session& ses, lt::alert const* alert) {
-			if (auto* a = lt::alert_cast<lt::listen_succeeded_alert>(alert))
-			{
-				if (a->sock_type == listen_succeeded_alert::socks5)
-				{
-					TEST_EQUAL(a->endpoint.address(), addr("50.50.50.50"));
-					TEST_EQUAL(a->endpoint.port(), 6881);
-					listen_alert = true;
-				}
-			}
-		},
-		[](sim::simulation& sim, lt::session& ses
-			, boost::shared_ptr<lt::torrent_info> ti)
-		{
-			sim.run();
-		}
-	);
-
-	TEST_EQUAL(listen_alert, true);
-}
-
-TORRENT_TEST(socks5_tcp_listen_alert)
-{
-	using namespace libtorrent;
-	bool listen_alert = false;
-	run_test(
-		[](lt::session& ses)
-		{
-			set_proxy(ses, settings_pack::socks5);
-		},
-		[&](lt::session& ses, lt::alert const* alert) {
-			if (auto* a = lt::alert_cast<lt::listen_succeeded_alert>(alert))
-			{
-				if (a->sock_type == listen_succeeded_alert::socks5)
-				{
-					TEST_EQUAL(a->endpoint.address(), addr("50.50.50.50"));
-					TEST_EQUAL(a->endpoint.port(), 6881);
-					listen_alert = true;
-				}
-			}
-		},
-		[](sim::simulation& sim, lt::session& ses
-			, boost::shared_ptr<lt::torrent_info> ti)
-		{
-			sim.run();
-		}
-	);
-
-	TEST_EQUAL(listen_alert, true);
-}
-
 TORRENT_TEST(socks5_tcp_announce)
 {
 	using namespace libtorrent;
@@ -264,7 +127,7 @@ TORRENT_TEST(socks5_tcp_announce)
 		[&alert_port](lt::session& ses, lt::alert const* alert) {
 			if (auto* a = lt::alert_cast<lt::listen_succeeded_alert>(alert))
 			{
-				if (a->sock_type == listen_succeeded_alert::socks5)
+				if (a->sock_type == listen_succeeded_alert::udp)
 				{
 					alert_port = a->endpoint.port();
 				}
@@ -298,8 +161,132 @@ TORRENT_TEST(socks5_tcp_announce)
 		}
 	);
 
-	TEST_EQUAL(alert_port, tracker_port);
+	// since force_proxy is enabled, don't send the port
+	TEST_EQUAL(tracker_port, 0);
 	TEST_CHECK(alert_port != -1);
 	TEST_CHECK(tracker_port != -1);
 }
 
+TORRENT_TEST(udp_tracker)
+{
+	using namespace libtorrent;
+	bool tracker_alert = false;
+	bool connected = false;
+	bool announced = false;
+	run_test(
+		[](lt::session& ses)
+		{
+			set_proxy(ses, settings_pack::socks5);
+
+			// The socks server in libsimulator does not support forwarding UDP
+			// packets to hostnames (just IPv4 destinations)
+			settings_pack p;
+			p.set_bool(settings_pack::proxy_hostnames, false);
+			ses.apply_settings(p);
+
+			lt::add_torrent_params params;
+			params.info_hash = sha1_hash("abababababababababab");
+			params.trackers.push_back("udp://2.2.2.2:8080/announce");
+			params.save_path = ".";
+			ses.async_add_torrent(params);
+		},
+		[&tracker_alert](lt::session& ses, lt::alert const* alert) {
+			if (lt::alert_cast<lt::tracker_announce_alert>(alert))
+				tracker_alert = true;
+		},
+		[&](sim::simulation& sim, lt::session& ses
+			, boost::shared_ptr<lt::torrent_info> ti)
+		{
+			// listen on port 8080
+			udp_server tracker(sim, "2.2.2.2", 8080,
+			[&](char const* msg, int size)
+			{
+				using namespace libtorrent::detail;
+				std::vector<char> ret;
+				TEST_CHECK(size >= 16);
+
+				if (size < 16) return ret;
+
+				std::uint64_t connection_id = read_uint64(msg);
+				std::uint32_t action = read_uint32(msg);
+				std::uint32_t transaction_id = read_uint32(msg);
+
+				std::uint64_t const conn_id = 0xfeedface1337ull;
+
+				if (action == 0)
+				{
+					std::printf("udp connect\n");
+					// udp tracker connect
+					TEST_CHECK(connection_id == 0x41727101980ull);
+					auto inserter = std::back_inserter(ret);
+					write_uint32(0, inserter); // connect
+					write_uint32(transaction_id, inserter);
+					write_uint64(conn_id, inserter);
+					connected = true;
+				}
+				else if (action == 1)
+				{
+					std::printf("udp announce\n");
+					// udp tracker announce
+					TEST_EQUAL(connection_id, conn_id);
+
+					auto inserter = std::back_inserter(ret);
+					write_uint32(1, inserter); // announce
+					write_uint32(transaction_id, inserter);
+					write_uint32(1800, inserter);
+					write_uint32(0, inserter); // leechers
+					write_uint32(0, inserter); // seeders
+					announced = true;
+				}
+				else
+				{
+					std::printf("unsupported udp tracker action: %d\n", action);
+				}
+				return ret;
+			});
+
+			sim.run();
+		}
+	);
+
+	TEST_CHECK(tracker_alert);
+	TEST_CHECK(connected);
+	TEST_CHECK(announced);
+}
+
+TORRENT_TEST(socks5_udp_retry)
+{
+	// this test is asserting that when a UDP associate command fails, we have a
+	// 5 second delay before we try again. There is no need to actually add a
+	// torrent for this test, just to open the udp socket with a socks5 proxy
+	using namespace libtorrent;
+
+	// setup the simulation
+	sim::default_config network_cfg;
+	sim::simulation sim{network_cfg};
+	std::unique_ptr<sim::asio::io_service> ios = make_io_service(sim, 0);
+	lt::session_proxy zombie;
+
+	sim::asio::io_service proxy_ios{sim, addr("50.50.50.50") };
+	// close UDP associate connectons prematurely
+	sim::socks_server socks5(proxy_ios, 5555, 5, socks_flag::disconnect_udp_associate);
+
+	lt::settings_pack pack = settings();
+	// create session
+	std::shared_ptr<lt::session> ses = std::make_shared<lt::session>(pack, *ios);
+	set_proxy(*ses, settings_pack::socks5);
+
+	// run for 60 seconds.The sokcks5 retry interval is expected to be 5 seconds,
+	// meaning there should have been 12 connection attempts
+	sim::timer t(sim, lt::seconds(60), [&](boost::system::error_code const& ec)
+	{
+		fprintf(stderr, "shutting down\n");
+		// shut down
+		zombie = ses->abort();
+		ses.reset();
+	});
+	sim.run();
+
+	// number of UDP ASSOCIATE commands invoked on the socks proxy
+	TEST_EQUAL(socks5.cmd_counts()[2], 12);
+}

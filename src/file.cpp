@@ -37,7 +37,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #ifdef __clang__
 #pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-pragmas"
 #pragma clang diagnostic ignored "-Wunused-macros"
+#pragma clang diagnostic ignored "-Wreserved-id-macro"
 #endif
 
 // these defines are just in case the system we're on needs them for 64 bit file
@@ -129,6 +131,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifdef TORRENT_ANDROID
 #include <sys/syscall.h>
 #define lseek lseek64
+#define pread pread64
+#define pwrite pwrite64
+#define ftruncate ftruncate64
 #endif
 
 #elif defined __APPLE__ && defined __MACH__ && MAC_OS_X_VERSION_MIN_REQUIRED >= 1050
@@ -137,8 +142,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <copyfile.h>
 
 #endif
-
-#undef _FILE_OFFSET_BITS
 
 // make sure the _FILE_OFFSET_BITS define worked
 // on this platform. It's supposed to make file
@@ -537,7 +540,7 @@ namespace libtorrent
 		// something failed. Does the filesystem not support hard links?
 		// TODO: 3 find out what error code is reported when the filesystem
 		// does not support hard links.
-		DWORD error = GetLastError();
+		DWORD const error = GetLastError();
 		if (error != ERROR_NOT_SUPPORTED && error != ERROR_ACCESS_DENIED)
 		{
 			// it's possible CreateHardLink will copy the file internally too,
@@ -699,27 +702,6 @@ namespace libtorrent
 		}
 
 		rename(inf, newf, ec);
-
-		// on OSX, the error when trying to rename a file across different
-		// volumes is EXDEV, which will make it fall back to copying.
-
-		if (ec)
-		{
-			if (ec != boost::system::errc::no_such_file_or_directory
-				&& ec != boost::system::errc::invalid_argument
-				&& ec != boost::system::errc::permission_denied)
-			{
-				ec.clear();
-				copy_file(inf, newf, ec);
-
-				if (!ec)
-				{
-					// ignore errors when removing
-					error_code ignore;
-					remove(inf, ignore);
-				}
-			}
-		}
 	}
 
 	std::string split_path(std::string const& f)
@@ -1681,6 +1663,7 @@ typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
 
 	namespace {
 
+#if !TORRENT_USE_PREADV
 	void gather_copy(file::iovec_t const* bufs, int num_bufs, char* dst)
 	{
 		std::size_t offset = 0;
@@ -1701,7 +1684,6 @@ typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
 		}
 	}
 
-#if !TORRENT_USE_PREADV
 	bool coalesce_read_buffers(file::iovec_t const*& bufs, int& num_bufs
 		, file::iovec_t* tmp)
 	{
@@ -2135,7 +2117,7 @@ typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
 				offs = inf.AllocationSize;
 			}
 
-			if (offs.QuadPart != s)
+			if (offs.QuadPart < s)
 			{
 				// if the user has permissions, avoid filling
 				// the file with zeroes, but just fill it with

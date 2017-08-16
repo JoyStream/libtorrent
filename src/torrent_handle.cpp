@@ -361,6 +361,13 @@ namespace libtorrent
 		TORRENT_ASYNC_CALL(queue_down);
 	}
 
+	void torrent_handle::queue_position_set(int p) const
+	{
+		TORRENT_ASSERT_PRECOND(p >= 0);
+		if (p < 0) return;
+		TORRENT_ASYNC_CALL1(set_queue_position, p);
+	}
+
 	void torrent_handle::queue_position_top() const
 	{
 		TORRENT_ASYNC_CALL1(set_queue_position, 0);
@@ -726,7 +733,7 @@ namespace libtorrent
 		boost::shared_ptr<torrent> t = m_torrent.lock();
 		if (!t || !t->has_storage()) return;
 		session_impl& ses = static_cast<session_impl&>(t->session());
-		ses.disk_thread().files().get_status(&status, &t->storage());
+		ses.disk_thread().files().get_status(&status, t->get_storage());
 	}
 
 	void torrent_handle::scrape_tracker(int idx) const

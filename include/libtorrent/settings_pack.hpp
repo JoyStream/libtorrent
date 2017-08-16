@@ -45,8 +45,12 @@ POSSIBILITY OF SUCH DAMAGE.
 // OVERVIEW
 // 
 // You have some control over session configuration through the session::apply_settings()
-// member function. To change one or more configuration options, create a settings_pack.
+// member function. To change one or more configuration options, create a settings_pack
 // object and fill it with the settings to be set and pass it in to session::apply_settings().
+// 
+// The settings_pack object is a collection of settings updates that are applied
+// to the session when passed to session::apply_settings(). It's empty when
+// constructed.
 // 
 // You have control over proxy and authorization settings and also the user-agent
 // that will be sent to the tracker. The user-agent will also be used to identify the
@@ -66,9 +70,14 @@ namespace libtorrent
 	TORRENT_EXPORT int setting_by_name(std::string const& name);
 	TORRENT_EXPORT char const* name_for_setting(int s);
 
+	// returns a settings_pack with every setting set to its default value
+	TORRENT_EXPORT settings_pack default_settings();
+
 #ifndef TORRENT_NO_DEPRECATE
 	struct session_settings;
-	boost::shared_ptr<settings_pack> load_pack_from_struct(aux::session_settings const& current, session_settings const& s);
+	TORRENT_DEPRECATED
+	settings_pack load_pack_from_struct(aux::session_settings const& current, session_settings const& s);
+	TORRENT_DEPRECATED
 	void load_struct_from_settings(aux::session_settings const& current, session_settings& ret);
 #endif
 
@@ -89,7 +98,12 @@ namespace libtorrent
 		void set_int(int name, int val);
 		void set_bool(int name, bool val);
 		bool has_val(int name) const;
+
+		// clear the settings pack from all settings
 		void clear();
+
+		// clear a specific setting from the pack
+		void clear(int name);
 
 		std::string get_str(int name) const;
 		int get_int(int name) const;
@@ -120,6 +134,7 @@ namespace libtorrent
 			// omitted.
 			announce_ip,
 
+#ifndef TORRENT_NO_DEPRECATE
 			// ``mmap_cache`` may be set to a filename where the disk cache will
 			// be mmapped to. This could be useful, for instance, to map the disk
 			// cache from regular rotating hard drives onto an SSD drive. Doing
@@ -143,7 +158,10 @@ namespace libtorrent
 			// 
 			// This feature requires the ``mmap`` system call, on systems that
 			// don't have ``mmap`` this setting is ignored.
-			mmap_cache,
+			mmap_cache TORRENT_DEPRECATED_ENUM,
+#else
+			deprecated12,
+#endif
 
 			// this is the client name and version identifier sent to peers in the
 			// handshake message. If this is an empty string, the user_agent is
@@ -169,11 +187,18 @@ namespace libtorrent
 			// IPs and multiple ports. Binding to port 0 will make the
 			// operating system pick the port. The default is "0.0.0.0:6881", which
 			// binds to all interfaces on port 6881.
-			//
+			// 
+			// If binding fails because the port is busy, the port number will be
+			// incremented by one, ``settings_pack::max_retry_port_bind`` times.
+			// 
+			// if all retry attempts fail, the socket will be bound to port 0,
+			// meaning the operating system will pick a port. This behavior can be
+			// disabled by disabling ``settings_pack::listen_system_port_fallback``.
+			// 
 			// if binding fails, the listen_failed_alert is posted, potentially
 			// more than once. Once/if binding the listen socket(s) succeed,
 			// listen_succeeded_alert is posted.
-			//
+			// 
 			// Each port will attempt to open both a UDP and a TCP listen socket,
 			// to allow accepting uTP connections as well as TCP. If using the DHT,
 			// this will also make the DHT use the same UDP ports.
@@ -201,7 +226,10 @@ namespace libtorrent
 
 			// this is the fingerprint for the client. It will be used as the
 			// prefix to the peer_id. If this is 20 bytes (or longer) it will be
-			// used as the peer-id
+			// truncated at 20 bytes and used as the entire peer-id
+			// 
+			// There is a utility function, generate_fingerprint() that can be used
+			// to generate a standard client peer ID fingerprint prefix.
 			peer_fingerprint,
 
 			// This is a comma-separated list of IP port-pairs. They will be added
@@ -226,11 +254,11 @@ namespace libtorrent
 			// in a swarm has the same IP address.
 			allow_multiple_connections_per_ip = bool_type_base,
 
+#ifndef TORRENT_NO_DEPRECATE
 			// if set to true, upload, download and unchoke limits are ignored for
 			// peers on the local network. This option is *DEPRECATED*, please use
 			// set_peer_class_filter() instead.
-#ifndef TORRENT_NO_DEPRECATE
-			ignore_limits_on_local_network,
+			ignore_limits_on_local_network TORRENT_DEPRECATED_ENUM,
 #else
 			deprecated1,
 #endif
@@ -274,17 +302,13 @@ namespace libtorrent
 			// pieces.
 			use_read_cache,
 #ifndef TORRENT_NO_DEPRECATE
-			use_write_cache,
-#else
-			deprecated7,
-#endif
+			use_write_cache TORRENT_DEPRECATED_ENUM,
 
 			// this will make the disk cache never flush a write piece if it would
 			// cause is to have to re-read it once we want to calculate the piece
 			// hash
-			dont_flush_write_cache,
+			dont_flush_write_cache TORRENT_DEPRECATED_ENUM,
 
-#ifndef TORRENT_NO_DEPRECATE
 			// ``explicit_read_cache`` defaults to 0. If set to something greater
 			// than 0, the disk read cache will not be evicted by cache misses and
 			// will explicitly be controlled based on the rarity of pieces. Rare
@@ -293,9 +317,11 @@ namespace libtorrent
 			// value is the number of pieces to keep in the read cache. If the
 			// actual read cache can't fit as many, it will essentially be
 			// clamped.
-			explicit_read_cache,
+			explicit_read_cache TORRENT_DEPRECATED_ENUM,
 #else
+			deprecated7,
 			deprecated10,
+			deprecated13,
 #endif
 
 			// allocate separate, contiguous, buffers for read and write calls.
@@ -364,7 +390,7 @@ namespace libtorrent
 			// will be locked in physical RAM, never to be swapped out. Every time
 			// a disk buffer is allocated and freed, there will be the extra
 			// overhead of a system call.
-			lock_disk_cache,
+			lock_disk_cache TORRENT_DEPRECATED_ENUM,
 #else
 			deprecated8,
 #endif
@@ -498,7 +524,7 @@ namespace libtorrent
 			// set to true if uTP connections should be rate limited This option
 			// is *DEPRECATED*, please use set_peer_class_filter() instead.
 #ifndef TORRENT_NO_DEPRECATE
-			rate_limit_utp,
+			rate_limit_utp TORRENT_DEPRECATED_ENUM,
 #else
 			deprecated2,
 #endif
@@ -762,9 +788,7 @@ namespace libtorrent
 			// for viruses. deferring the closing of the files will be the
 			// difference between a usable system and a completely hogged down
 			// system. Most operating systems also has a limit on the total number
-			// of file descriptors a process may have open. It is usually a good
-			// idea to find this limit and set the number of connections and the
-			// number of files limits so their sum is slightly below it.
+			// of file descriptors a process may have open.
 			file_pool_size,
 
 			// ``max_failcount`` is the maximum times we try to connect to a peer
@@ -825,7 +849,7 @@ namespace libtorrent
 			// suggest messages to create a bias of its peers to request certain
 			// pieces. The modes are:
 			// 
-			// * ``no_piece_suggestsions`` which is the default and will not send
+			// * ``no_piece_suggestions`` which is the default and will not send
 			//   out suggest messages.
 			// * ``suggest_read_cache`` which will send out suggest messages for
 			//   the most recent pieces that are in the read cache.
@@ -888,7 +912,7 @@ namespace libtorrent
 			//   still allocates all upload capacity, but shuffles it around to
 			//   the best peers first. For this choker to be efficient, you need
 			//   to set a global upload rate limit
-			//   (``session::set_upload_rate_limit()``). For more information
+			//   (``settings_pack::upload_rate_limit``). For more information
 			//   about this choker, see the paper_. This choker is not fully
 			//   implemented nor tested.
 			// 
@@ -946,7 +970,7 @@ namespace libtorrent
 			// affinity to pick pieces that are already in the cache, so that
 			// subsequent refreshes only swaps in pieces that are rarer than
 			// whatever is in the cache at the time.
-			explicit_cache_interval,
+			explicit_cache_interval TORRENT_DEPRECATED_ENUM,
 #else
 			deprecated11,
 #endif
@@ -1128,6 +1152,7 @@ namespace libtorrent
 			recv_socket_buffer_size,
 			send_socket_buffer_size,
 
+#ifndef TORRENT_NO_DEPRECATE
 			// ``file_checks_delay_per_block`` is the number of milliseconds to
 			// sleep in between disk read operations when checking torrents. This
 			// defaults to 0, but can be set to higher numbers to slow down the
@@ -1135,7 +1160,10 @@ namespace libtorrent
 			// be useful for background tasks that doesn't matter if they take a
 			// bit longer, as long as they leave disk I/O time for other
 			// processes.
-			file_checks_delay_per_block,
+			file_checks_delay_per_block TORRENT_DEPRECATED_ENUM,
+#else
+			deprecated14,
+#endif
 
 			// ``read_cache_line_size`` is the number of blocks to read into the
 			// read cache when a read cache miss occurs. Setting this to 0 is
@@ -1245,26 +1273,20 @@ namespace libtorrent
 			// share_mode_target is set to more than 3, nothing is downloaded.
 			share_mode_target,
 
-			// ``upload_rate_limit``, ``download_rate_limit``,
-			// ``local_upload_rate_limit`` and ``local_download_rate_limit`` sets
+			// ``upload_rate_limit`` and ``download_rate_limit`` sets
 			// the session-global limits of upload and download rate limits, in
-			// bytes per second. The local rates refer to peers on the local
-			// network. By default peers on the local network are not rate
+			// bytes per second. By default peers on the local network are not rate
 			// limited.
 			// 
-			// These rate limits are only used for local peers (peers within the
-			// same subnet as the client itself) and it is only used when
-			// ``ignore_limits_on_local_network`` is set to true (which it is by
-			// default). These rate limits default to unthrottled, but can be
-			// useful in case you want to treat local peers preferentially, but
-			// not quite unthrottled.
-			// 
 			// A value of 0 means unlimited.
+			// 
+			// For fine grained control over rate limits, including making them apply
+			// to local peers, see peer-classes_.
 			upload_rate_limit,
 			download_rate_limit,
 #ifndef TORRENT_NO_DEPRECATE
-			local_upload_rate_limit,
-			local_download_rate_limit,
+			local_upload_rate_limit TORRENT_DEPRECATED_ENUM,
+			local_download_rate_limit TORRENT_DEPRECATED_ENUM,
 #else
 			deprecated3,
 			deprecated4,
@@ -1293,7 +1315,7 @@ namespace libtorrent
 			// have no limit. When limiting the number of simultaneous connection
 			// attempts, peers will be put in a queue waiting for their turn to
 			// get connected.
-			half_open_limit,
+			half_open_limit TORRENT_DEPRECATED_ENUM,
 #else
 			deprecated5,
 #endif
@@ -1350,7 +1372,7 @@ namespace libtorrent
 			utp_num_resends,
 			utp_connect_timeout,
 #ifndef TORRENT_NO_DEPRECATE
-			utp_delayed_ack,
+			utp_delayed_ack TORRENT_DEPRECATED_ENUM,
 #else
 			deprecated6,
 #endif
@@ -1376,7 +1398,7 @@ namespace libtorrent
 			// normal client. If this is a high performance server which expects
 			// to receive a lot of connections, or used in a simulator or test, it
 			// might make sense to raise this number. It will not take affect
-			// until listen_on() is called again (or for the first time).
+			// until the ``listen_interfaces`` settings is updated.
 			listen_queue_size,
 
 			// ``torrent_connect_boost`` is the number of peers to try to connect
@@ -1405,7 +1427,7 @@ namespace libtorrent
 			// higher than the number of CPU cores would presumably not provide
 			// any benefit of setting it to the number of cores. If it's set to 0,
 			// hashing is done in the disk thread.
-			hashing_threads,
+			hashing_threads TORRENT_DEPRECATED_ENUM,
 #else
 			deprecated9,
 #endif
@@ -1557,6 +1579,33 @@ namespace libtorrent
 			// them in the cache is limited.
 			cache_size_volatile,
 
+			// The maximum request range of an url seed in bytes. This value
+			// defines the largest possible sequential web seed request. Default
+			// is 16 * 1024 * 1024. Lower values are possible but will be ignored
+			// if they are lower then piece size.
+			// This value should be related to your download speed to prevent
+			// libtorrent from creating too many expensive http requests per
+			// second. You can select a value as high as you want but keep in mind
+			// that libtorrent can't create parallel requests if the first request
+			// did already select the whole file.
+			// If you combine bittorrent seeds with web seeds and pick strategies
+			// like rarest first you may find your web seed requests split into
+			// smaller parts because we don't download already picked pieces
+			// twice.
+			urlseed_max_request_bytes,
+
+			// time to wait until a new retry of a web seed name lookup
+			web_seed_name_lookup_retry,
+
+			// the number of seconds between closing the file opened the longest
+			// ago. 0 means to disable the feature. The purpose of this is to
+			// periodically close files to trigger the operating system flushing
+			// disk cache. Specifically it has been observed to be required on
+			// windows to not have the disk cache grow indefinitely.
+			// This defaults to 120 seconds on windows, and disabled on other
+			// systems.
+			close_file_interval,
+
 			max_int_setting_internal
 		};
 
@@ -1587,7 +1636,7 @@ namespace libtorrent
 		{
 			enable_os_cache = 0,
 #ifndef TORRENT_NO_DEPRECATE
-			disable_os_cache_for_aligned_files = 2,
+			disable_os_cache_for_aligned_files TORRENT_DEPRECATED_ENUM = 2,
 #else
 			deprecated = 1,
 #endif

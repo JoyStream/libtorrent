@@ -193,17 +193,22 @@ namespace libtorrent
 		return msgs[ev];
 	}
 
-	boost::system::error_category& get_bdecode_category()
+	boost::system::error_category& bdecode_category()
 	{
 		static bdecode_error_category bdecode_category;
 		return bdecode_category;
 	}
 
+#ifndef TORRENT_NO_DEPRECATED
+	boost::system::error_category& get_bdecode_category()
+	{ return bdecode_category(); }
+#endif
+
 	namespace bdecode_errors
 	{
 		boost::system::error_code make_error_code(error_code_enum e)
 		{
-			return boost::system::error_code(e, get_bdecode_category());
+			return boost::system::error_code(e, bdecode_category());
 		}
 	}
 
@@ -346,7 +351,7 @@ namespace libtorrent
 	}
 
 	std::string bdecode_node::list_string_value_at(int i
-		, char const* default_val)
+		, char const* default_val) const
 	{
 		bdecode_node n = list_at(i);
 		if (n.type() != bdecode_node::string_t) return default_val;
@@ -354,7 +359,7 @@ namespace libtorrent
 	}
 
 	boost::int64_t bdecode_node::list_int_value_at(int i
-		, boost::int64_t default_val)
+		, boost::int64_t default_val) const
 	{
 		bdecode_node n = list_at(i);
 		if (n.type() != bdecode_node::int_t) return default_val;
@@ -689,7 +694,7 @@ namespace libtorrent
 	}
 
 #define TORRENT_FAIL_BDECODE(code) do { \
-	ec = make_error_code(code); \
+	ec = code; \
 	if (error_pos) *error_pos = start - orig_start; \
 	goto done; \
 	} TORRENT_WHILE_0
@@ -703,7 +708,7 @@ namespace libtorrent
 		if (end - start > bdecode_token::max_offset)
 		{
 			if (error_pos) *error_pos = 0;
-			ec = make_error_code(bdecode_errors::limit_exceeded);
+			ec = bdecode_errors::limit_exceeded;
 			return -1;
 		}
 
@@ -834,6 +839,7 @@ namespace libtorrent
 					boost::int64_t len = t - '0';
 					char const* str_start = start;
 					++start;
+					if (start >= end) TORRENT_FAIL_BDECODE(bdecode_errors::unexpected_eof);
 					bdecode_errors::error_code_enum e = bdecode_errors::no_error;
 					start = parse_int(start, end, ':', len, e);
 					if (e)

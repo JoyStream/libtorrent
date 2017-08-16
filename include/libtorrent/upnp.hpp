@@ -93,7 +93,12 @@ namespace libtorrent
 	}
 
 	// the boost.system error category for UPnP errors
-	TORRENT_EXPORT boost::system::error_category& get_upnp_category();
+	TORRENT_EXPORT boost::system::error_category& upnp_category();
+
+#ifndef TORRENT_NO_DEPRECATED
+	TORRENT_DEPRECATED TORRENT_EXPORT
+	boost::system::error_category& get_upnp_category();
+#endif
 
 // int: port-mapping index
 // address: external address as queried from router
@@ -125,8 +130,29 @@ struct parse_state
 	}
 };
 
+struct error_code_parse_state
+{
+	error_code_parse_state(): in_error_code(false), exit(false), error_code(-1) {}
+	bool in_error_code;
+	bool exit;
+	int error_code;
+};
+
+struct ip_address_parse_state: error_code_parse_state
+{
+	ip_address_parse_state(): in_ip_address(false) {}
+	bool in_ip_address;
+	std::string ip_address;
+};
+
 TORRENT_EXTRA_EXPORT void find_control_url(int type, char const* string
 	, int str_len, parse_state& state);
+
+TORRENT_EXTRA_EXPORT void find_error_code(int type, char const* string
+	, int str_len, error_code_parse_state& state);
+
+TORRENT_EXTRA_EXPORT void find_ip_address(int type, char const* string
+	, int str_len, ip_address_parse_state& state);
 
 // TODO: support using the windows API for UPnP operations as well
 class TORRENT_EXTRA_EXPORT upnp : public boost::enable_shared_from_this<upnp>
@@ -137,6 +163,8 @@ public:
 		, portmap_callback_t const& cb, log_callback_t const& lcb
 		, bool ignore_nonrouters);
 	~upnp();
+
+	void set_user_agent(std::string const& v) { m_user_agent = v; }
 
 	void start();
 
@@ -159,13 +187,13 @@ public:
 	// portmap_alert_ respectively. If The mapping fails immediately, the return value
 	// is -1, which means failure. There will not be any error alert notification for
 	// mappings that fail with a -1 return value.
-	int add_mapping(protocol_type p, int external_port, int local_port);
+	int add_mapping(protocol_type p, int external_port, tcp::endpoint local_ep);
 
 	// This function removes a port mapping. ``mapping_index`` is the index that refers
 	// to the mapping you want to remove, which was returned from add_mapping().
 	void delete_mapping(int mapping_index);
 
-	bool get_mapping(int mapping_index, int& local_port, int& external_port, int& protocol) const;
+	bool get_mapping(int mapping_index, tcp::endpoint& local_ep, int& external_port, int& protocol) const;
 
 	void discover_device();
 	void close();
@@ -202,7 +230,6 @@ private:
 	void next(rootdevice& d, int i, mutex::scoped_lock& l);
 	void update_map(rootdevice& d, int i, mutex::scoped_lock& l);
 
-
 	void on_upnp_xml(error_code const& e
 		, libtorrent::http_parser const& p, rootdevice& d
 		, http_connection& c);
@@ -234,11 +261,10 @@ private:
 		global_mapping_t()
 			: protocol(none)
 			, external_port(0)
-			, local_port(0)
 		{}
 		int protocol;
 		int external_port;
-		int local_port;
+		tcp::endpoint local_ep;
 	};
 
 	struct mapping_t
@@ -246,7 +272,6 @@ private:
 		enum action_t { action_none, action_add, action_delete };
 		mapping_t()
 			: action(action_none)
-			, local_port(0)
 			, external_port(0)
 			, protocol(none)
 			, failcount(0)
@@ -255,11 +280,11 @@ private:
 		// the time the port mapping will expire
 		time_point expires;
 
-		int action;
-
-		// the local port for this mapping. If this is set
+		// the local port for this mapping. The port is set
 		// to 0, the mapping is not in use
-		int local_port;
+		tcp::endpoint local_ep;
+
+		int action;
 
 		// the external (on the NAT router) port
 		// for the mapping. This is the port we
@@ -275,8 +300,7 @@ private:
 
 	struct rootdevice
 	{
-		rootdevice(): service_namespace(0)
-			, port(0)
+		rootdevice(): port(0)
 			, lease_duration(default_lease_time)
 			, supports_specific_external(true)
 			, disabled(false)
@@ -306,7 +330,7 @@ private:
 		// the url to the WANIP or WANPPP interface
 		std::string control_url;
 		// either the WANIP namespace or the WANPPP namespace
-		char const* service_namespace;
+		std::string service_namespace;
 
 		std::vector<mapping_t> mapping;
 
@@ -357,7 +381,7 @@ private:
 
 	std::vector<global_mapping_t> m_mappings;
 
-	std::string const& m_user_agent;
+	std::string m_user_agent;
 
 	// the set of devices we've found
 	std::set<rootdevice> m_devices;
@@ -410,8 +434,6 @@ namespace boost { namespace system {
 	template<> struct is_error_code_enum<libtorrent::upnp_errors::error_code_enum>
 	{ static const bool value = true; };
 
-	template<> struct is_error_condition_enum<libtorrent::upnp_errors::error_code_enum>
-	{ static const bool value = true; };
 } }
 
 #endif

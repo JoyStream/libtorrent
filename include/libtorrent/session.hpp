@@ -155,19 +155,19 @@ namespace libtorrent
 	// the settings to be set and pass it in to ``session::apply_settings()``.
 	// 
 	// see apply_settings().
-	class TORRENT_EXPORT session: public boost::noncopyable, public session_handle
+	class TORRENT_EXPORT session : public boost::noncopyable, public session_handle
 	{
 	public:
 
-		// Constructs the session obects which acts as the container of torrents.
+		// Constructs the session objects which acts as the container of torrents.
 		// It provides configuration options across torrents (such as rate limits,
 		// disk cache, ip filter etc.). In order to avoid a race condition between
 		// starting the session and configuring it, you can pass in a
 		// settings_pack object. Its settings will take effect before the session
 		// starts up.
 		// 
-		// The ``flags`` parameter can be used to start default features (upnp &
-		// nat-pmp) and default plugins (ut_metadata, ut_pex and smart_ban). The
+		// The ``flags`` parameter can be used to start default features (UPnP &
+		// NAT-PMP) and default plugins (ut_metadata, ut_pex and smart_ban). The
 		// default is to start those features. If you do not want them to start,
 		// pass 0 as the flags parameter.
 		session(settings_pack const& pack = settings_pack()
@@ -201,6 +201,14 @@ namespace libtorrent
 		}
 
 #ifndef TORRENT_NO_DEPRECATE
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 		TORRENT_DEPRECATED
 		session(fingerprint const& print
 			, int flags = start_default_features | add_default_plugins
@@ -253,6 +261,12 @@ namespace libtorrent
 			}
 			start(flags, pack, NULL);
 		}
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 #endif // TORRENT_NO_DEPRECATE
 
 		// The destructor of session will notify all trackers that our torrents

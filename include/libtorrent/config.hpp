@@ -92,15 +92,30 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
+// ====== CLANG ========
+
+#if defined __clang__
+
+# if !defined TORRENT_BUILDING_LIBRARY
+// TODO: figure out which version of clang this is supported in
+#  define TORRENT_DEPRECATED_ENUM __attribute__ ((deprecated))
+#  define TORRENT_DEPRECATED_MEMBER __attribute__ ((deprecated))
+# endif
+
 // ======= GCC =========
 
-#if defined __GNUC__
+#elif defined __GNUC__
 
 // deprecation markup is only enabled when libtorrent
 // headers are included by clients, not while building
 // libtorrent itself
 # if __GNUC__ >= 3 && !defined TORRENT_BUILDING_LIBRARY
 #  define TORRENT_DEPRECATED __attribute__ ((deprecated))
+# endif
+
+# if __GNUC__ >= 6 && !defined TORRENT_BUILDING_LIBRARY
+#  define TORRENT_DEPRECATED_ENUM __attribute__ ((deprecated))
+#  define TORRENT_DEPRECATED_MEMBER __attribute__ ((deprecated))
 # endif
 
 // ======= SUNPRO =========
@@ -184,7 +199,7 @@ POSSIBILITY OF SUCH DAMAGE.
 // FreeBSD has a reasonable iconv signature
 // unless we're on glibc
 #ifndef __GLIBC__
-# define TORRENT_ICONV_ARG (const char**)
+# define TORRENT_ICONV_ARG(x) (x)
 #endif
 #endif // __APPLE__
 
@@ -329,7 +344,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_USE_IFCONF 1
 #define TORRENT_USE_SYSCTL 1
 #define TORRENT_USE_IPV6 0
-#define TORRENT_ICONV_ARG (const char**)
+#define TORRENT_ICONV_ARG(x) (x)
 #define TORRENT_USE_WRITEV 0
 #define TORRENT_USE_READV 0
 
@@ -442,7 +457,7 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 #endif
 
 #ifndef TORRENT_ICONV_ARG
-#define TORRENT_ICONV_ARG (char**)
+#define TORRENT_ICONV_ARG(x) const_cast<char**>(x)
 #endif
 
 #if defined __GNUC__ || defined __clang__
@@ -530,6 +545,14 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 
 #ifndef TORRENT_DEPRECATED
 #define TORRENT_DEPRECATED
+#endif
+
+#ifndef TORRENT_DEPRECATED_ENUM
+#define TORRENT_DEPRECATED_ENUM
+#endif
+
+#ifndef TORRENT_DEPRECATED_MEMBER
+#define TORRENT_DEPRECATED_MEMBER
 #endif
 
 #ifndef TORRENT_USE_COMMONCRYPTO

@@ -201,7 +201,7 @@ namespace libtorrent
 			out_policy = settings_pack::pe_disabled;
 #endif
 #ifndef TORRENT_DISABLE_LOGGING
-		char const* policy_name[] = {"forced", "enabled", "disabled"};
+		static char const* policy_name[] = {"forced", "enabled", "disabled"};
 		TORRENT_ASSERT(out_policy < sizeof(policy_name)/sizeof(policy_name[0]));
 		peer_log(peer_log_alert::info, "ENCRYPTION"
 			, "outgoing encryption policy: %s", policy_name[out_policy]);
@@ -561,7 +561,7 @@ namespace libtorrent
 			crypto_provide = settings_pack::pe_both;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		char const* level[] = {"plaintext", "rc4", "plaintext rc4"};
+		static char const* level[] = {"plaintext", "rc4", "plaintext rc4"};
 		peer_log(peer_log_alert::info, "ENCRYPTION"
 			, "%s", level[crypto_provide-1]);
 #endif
@@ -785,7 +785,7 @@ namespace libtorrent
 		TORRENT_ASSERT(t);
 
 		// add handshake to the send buffer
-		const char version_string[] = "BitTorrent protocol";
+		static const char version_string[] = "BitTorrent protocol";
 		const int string_len = sizeof(version_string)-1;
 
 		char handshake[1 + string_len + 8 + 20 + 20];
@@ -1621,7 +1621,7 @@ namespace libtorrent
 				boost::uint32_t error = detail::read_uint32(ptr);
 #ifndef TORRENT_DISABLE_LOGGING
 				error_code ec;
-				char const* err_msg[] = {"no such peer", "not connected", "no support", "no self"};
+				static char const* err_msg[] = {"no such peer", "not connected", "no support", "no self"};
 				peer_log(peer_log_alert::incoming_message, "HOLEPUNCH"
 					, "msg:failed error: %d msg: %s", error
 					, ((error > 0 && error < 5)?err_msg[error-1]:"unknown message id"));
@@ -1861,7 +1861,7 @@ namespace libtorrent
 		// there should be a version too
 		// but where do we put that info?
 
-		int last_seen_complete = boost::uint8_t(root.dict_find_int_value("complete_ago", -1));
+		int const last_seen_complete = root.dict_find_int_value("complete_ago", -1);
 		if (last_seen_complete >= 0) set_last_seen_complete(last_seen_complete);
 
 		std::string client_info = root.dict_find_string_value("v");
@@ -2124,7 +2124,7 @@ namespace libtorrent
 			// and don't send a bitfield
 			m_sent_bitfield = true;
 
-			// bootstrap superseeding by sending two have message
+			// bootstrap super-seeding by sending two have message
 			int piece = t->get_piece_to_super_seed(get_bitfield());
 			if (piece >= 0) superseed_piece(-1, piece);
 			piece = t->get_piece_to_super_seed(get_bitfield());
@@ -2833,7 +2833,7 @@ namespace libtorrent
 			rc4_decrypt(wr_recv_buf.begin + 20, 8);
 			wr_recv_buf.begin += 28;
 
-			const char sh_vc[] = {0,0,0,0, 0,0,0,0};
+			static const char sh_vc[] = {0,0,0,0, 0,0,0,0};
 			if (!std::equal(sh_vc, sh_vc+8, recv_buffer.begin + 20))
 			{
 				disconnect(errors::invalid_encryption_constant, op_encryption, 2);
@@ -3167,7 +3167,7 @@ namespace libtorrent
 			recv_buffer = m_recv_buffer.get();
 
 			int packet_size = recv_buffer[0];
-			const char protocol_string[] = "\x13" "BitTorrent protocol";
+			static const char protocol_string[] = "\x13" "BitTorrent protocol";
 
 			if (packet_size != 19 ||
 				memcmp(recv_buffer.begin, protocol_string, 20) != 0)
@@ -3405,8 +3405,7 @@ namespace libtorrent
 			}
 
 			m_client_version = identify_client(pid);
-			boost::optional<fingerprint> f = client_fingerprint(pid);
-			if (f && std::equal(f->name, f->name + 2, "BC"))
+			if (pid[0] == '-' && pid[1] == 'B' && pid[2] == 'C' && pid[7] == '-')
 			{
 				// if this is a bitcomet client, lower the request queue size limit
 				if (max_out_request_queue() > 50) max_out_request_queue(50);

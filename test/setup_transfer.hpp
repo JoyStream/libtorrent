@@ -64,7 +64,7 @@ EXPORT libtorrent::sha1_hash rand_hash();
 EXPORT std::map<std::string, boost::int64_t> get_counters(libtorrent::session& s);
 
 EXPORT libtorrent::alert const* wait_for_alert(
-	libtorrent::session& ses, int type, char const* name = "");
+	libtorrent::session& ses, int type, char const* name = "", int num = 1);
 
 EXPORT void print_ses_rate(float time
 	, libtorrent::torrent_status const* st1
@@ -75,7 +75,8 @@ EXPORT bool print_alerts(libtorrent::session& ses, char const* name
 	, bool allow_disconnects = false
 	, bool allow_no_torrents = false
 	, bool allow_failed_fastresume = false
-	, bool (*)(libtorrent::alert const*) = 0
+	, boost::function<bool(libtorrent::alert const*)> predicate
+		= boost::function<bool(libtorrent::alert const*)>()
 	, bool no_output = false);
 
 EXPORT void wait_for_listen(libtorrent::session& ses, char const* name);

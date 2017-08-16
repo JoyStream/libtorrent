@@ -61,7 +61,7 @@ namespace libtorrent
 	{
 		// libtorrent uses boost.system's ``error_code`` class to represent
 		// errors. libtorrent has its own error category
-		// get_libtorrent_category() with the error codes defined by
+		// libtorrent_category() with the error codes defined by
 		// error_code_enum.
 		enum error_code_enum
 		{
@@ -480,10 +480,10 @@ namespace libtorrent
 
 	// return the instance of the libtorrent_error_category which
 	// maps libtorrent error codes to human readable error messages.
-	TORRENT_EXPORT boost::system::error_category& get_libtorrent_category();
+	TORRENT_EXPORT boost::system::error_category& libtorrent_category();
 
 	// returns the error_category for HTTP errors
-	TORRENT_EXPORT boost::system::error_category& get_http_category();
+	TORRENT_EXPORT boost::system::error_category& http_category();
 
 	using boost::system::error_code;
 	using boost::system::error_condition;
@@ -492,8 +492,15 @@ namespace libtorrent
 	using boost::system::generic_category;
 	using boost::system::system_category;
 
+#ifndef TORRENT_NO_DEPRECATE
+	TORRENT_DEPRECATED TORRENT_EXPORT
+	boost::system::error_category& get_libtorrent_category();
+	TORRENT_DEPRECATED TORRENT_EXPORT
+	boost::system::error_category& get_http_category();
+#endif
+
 #ifndef BOOST_NO_EXCEPTIONS
-	struct TORRENT_EXPORT libtorrent_exception: std::exception
+	struct TORRENT_EXPORT libtorrent_exception : std::exception
 	{
 		libtorrent_exception(error_code const& s): m_error(s), m_msg(0) {}
 		virtual const char* what() const TORRENT_EXCEPTION_THROW_SPECIFIER;
@@ -553,7 +560,7 @@ namespace libtorrent
 		// an empty string.
 		char const* operation_str() const
 		{
-			char const* ops[] =
+			static char const* ops[] =
 			{
 				"", "stat", "mkdir", "open", "rename", "remove", "copy"
 				, "read", "write", "fallocate", "allocate cache piece"
@@ -571,13 +578,7 @@ namespace boost { namespace system {
 	template<> struct is_error_code_enum<libtorrent::errors::error_code_enum>
 	{ static const bool value = true; };
 
-	template<> struct is_error_condition_enum<libtorrent::errors::error_code_enum>
-	{ static const bool value = true; };
-
 	template<> struct is_error_code_enum<libtorrent::errors::http_errors>
-	{ static const bool value = true; };
-
-	template<> struct is_error_condition_enum<libtorrent::errors::http_errors>
 	{ static const bool value = true; };
 } }
 

@@ -43,7 +43,6 @@ using namespace libtorrent::aux;
 TORRENT_TEST(default_settings)
 {
 	aux::session_settings sett;
-	initialize_default_settings(sett);
 
 	entry e;
 	save_settings_to_dict(sett, e.dict());
@@ -57,10 +56,34 @@ TORRENT_TEST(default_settings)
 #endif
 }
 
+TORRENT_TEST(default_settings2)
+{
+	aux::session_settings sett;
+
+	settings_pack def = default_settings();
+
+	for (int i = 0; i < settings_pack::num_string_settings; ++i)
+	{
+		TEST_EQUAL(sett.get_str(settings_pack::string_type_base + i)
+			, def.get_str(settings_pack::string_type_base + i));
+	}
+
+	for (int i = 0; i < settings_pack::num_int_settings; ++i)
+	{
+		TEST_EQUAL(sett.get_int(settings_pack::int_type_base + i)
+			, def.get_int(settings_pack::int_type_base + i));
+	}
+
+	for (int i = 0; i < settings_pack::num_bool_settings; ++i)
+	{
+		TEST_EQUAL(sett.get_bool(settings_pack::bool_type_base + i)
+			, def.get_bool(settings_pack::bool_type_base + i));
+	}
+}
+
 TORRENT_TEST(apply_pack)
 {
 	aux::session_settings sett;
-	initialize_default_settings(sett);
 	settings_pack sp;
 	sp.set_int(settings_pack::max_out_request_queue, 1337);
 
@@ -102,9 +125,9 @@ TORRENT_TEST(test_name)
 	TEST_NAME(seeding_piece_quota);
 #ifndef TORRENT_NO_DEPRECATE
 	TEST_NAME(half_open_limit);
+	TEST_NAME(mmap_cache);
 #endif
 	TEST_NAME(peer_turnover_interval);
-	TEST_NAME(mmap_cache);
 }
 
 TORRENT_TEST(clear)
@@ -126,6 +149,42 @@ TORRENT_TEST(clear)
 	TEST_EQUAL(pack.has_val(settings_pack::lazy_bitfields), false);
 }
 
+TORRENT_TEST(clear_single_int)
+{
+	settings_pack sp;
+	sp.set_int(settings_pack::max_out_request_queue, 1337);
+
+	TEST_EQUAL(sp.get_int(settings_pack::max_out_request_queue), 1337);
+
+	sp.clear(settings_pack::max_out_request_queue);
+
+	TEST_EQUAL(sp.get_int(settings_pack::max_out_request_queue), 0);
+}
+
+TORRENT_TEST(clear_single_bool)
+{
+	settings_pack sp;
+	sp.set_bool(settings_pack::send_redundant_have, true);
+
+	TEST_EQUAL(sp.get_bool(settings_pack::send_redundant_have), true);
+
+	sp.clear(settings_pack::send_redundant_have);
+
+	TEST_EQUAL(sp.get_bool(settings_pack::send_redundant_have), false);
+}
+
+TORRENT_TEST(clear_single_string)
+{
+	settings_pack sp;
+	sp.set_str(settings_pack::user_agent, "foobar");
+
+	TEST_EQUAL(sp.get_str(settings_pack::user_agent), "foobar");
+
+	sp.clear(settings_pack::user_agent);
+
+	TEST_EQUAL(sp.get_str(settings_pack::user_agent), std::string());
+}
+
 TORRENT_TEST(duplicates)
 {
 	settings_pack p;
@@ -135,6 +194,34 @@ TORRENT_TEST(duplicates)
 	p.set_str(settings_pack::peer_fingerprint, "hij");
 
 	TEST_EQUAL(p.get_str(settings_pack::peer_fingerprint), "hij");
+}
+
+TORRENT_TEST(settings_pack_abi)
+{
+	// make sure enum values are preserved across libtorrent versions
+	// for ABI compatibility
+	// These values are only allowed to change across major versions
+
+	TEST_EQUAL(settings_pack::string_type_base, 0x0000);
+	TEST_EQUAL(settings_pack::int_type_base, 0x4000);
+	TEST_EQUAL(settings_pack::bool_type_base, 0x8000);
+	TEST_EQUAL(settings_pack::type_mask, 0xc000);
+
+	// strings
+	TEST_EQUAL(settings_pack::outgoing_interfaces, settings_pack::string_type_base + 4);
+	TEST_EQUAL(settings_pack::dht_bootstrap_nodes, settings_pack::string_type_base + 11);
+
+	// bool
+	TEST_EQUAL(settings_pack::lazy_bitfields, settings_pack::bool_type_base + 3);
+	TEST_EQUAL(settings_pack::use_read_cache, settings_pack::bool_type_base + 7);
+	TEST_EQUAL(settings_pack::proxy_tracker_connections, settings_pack::bool_type_base + 68);
+
+	// ints
+	TEST_EQUAL(settings_pack::max_suggest_pieces, settings_pack::int_type_base + 66);
+	TEST_EQUAL(settings_pack::connections_slack, settings_pack::int_type_base + 86);
+	TEST_EQUAL(settings_pack::aio_threads, settings_pack::int_type_base + 104);
+	TEST_EQUAL(settings_pack::max_http_recv_buffer_size, settings_pack::int_type_base + 115);
+	TEST_EQUAL(settings_pack::web_seed_name_lookup_retry, settings_pack::int_type_base + 128);
 }
 
 // TODO: load_pack_from_dict

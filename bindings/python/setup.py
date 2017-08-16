@@ -116,8 +116,15 @@ else:
 		extra_link = flags.parse(ldflags)
 		extra_compile = flags.parse(extra_cmd)
 
+		# for some reason distutils uses the CC environment variable to determine
+		# the compiler to use for C++
+		if 'CXX' in os.environ:
+			os.environ['CC'] = os.environ['CXX']
+		if 'CXXFLAGS' in os.environ:
+			os.environ['CFLAGS'] = os.environ['CXXFLAGS']
+
 		ext = [Extension('libtorrent',
-			sources = source_list,
+			sources = sorted(source_list),
 			language='c++',
 			include_dirs = flags.include_dirs,
 			library_dirs = flags.library_dirs,
@@ -126,7 +133,7 @@ else:
 			libraries = ['torrent-rasterbar'] + flags.libraries)]
 
 setup(name = 'python-libtorrent',
-	version = '1.1.1',
+	version = '1.1.4',
 	author = 'Arvid Norberg',
 	author_email = 'arvid@libtorrent.org',
 	description = 'Python bindings for libtorrent-rasterbar',

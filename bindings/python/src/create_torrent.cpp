@@ -6,6 +6,7 @@
 #include <libtorrent/create_torrent.hpp>
 #include <libtorrent/file_storage.hpp>
 #include "libtorrent/torrent_info.hpp"
+#include <libtorrent/version.hpp>
 #include "bytes.hpp"
 
 using namespace boost::python;
@@ -54,7 +55,7 @@ namespace
         ct.add_node(std::make_pair(addr, port));
     }
 
-#if !defined TORRENT_NO_DEPRECATE
+#ifndef TORRENT_NO_DEPRECATE
     void add_file(file_storage& ct, file_entry const& fe)
     {
        ct.add_file(fe);
@@ -121,7 +122,7 @@ void bind_create_torrent()
 {
     void (file_storage::*add_file0)(std::string const&, boost::int64_t
        , int, std::time_t, std::string const&) = &file_storage::add_file;
-#if !defined TORRENT_NO_DEPRECATE
+#ifndef TORRENT_NO_DEPRECATE
 #if TORRENT_USE_WSTRING
     void (file_storage::*add_file1)(std::wstring const&, boost::int64_t
        , int, std::time_t, std::string const&) = &file_storage::add_file;
@@ -147,7 +148,7 @@ void bind_create_torrent()
     boost::int64_t (file_storage::*file_storage_file_offset)(int) const = &file_storage::file_offset;
     int (file_storage::*file_storage_file_flags)(int) const = &file_storage::file_flags;
 
-#if !defined TORRENT_NO_DEPRECATE
+#ifndef TORRENT_NO_DEPRECATE
     file_entry (file_storage::*at)(int) const = &file_storage::at;
 #endif
 
@@ -159,7 +160,7 @@ void bind_create_torrent()
         .def("add_file", add_file1, (arg("path"), arg("size"), arg("flags") = 0, arg("mtime") = 0, arg("linkpath") = ""))
 #endif
         .def("num_files", &file_storage::num_files)
-#if !defined TORRENT_NO_DEPRECATE
+#ifndef TORRENT_NO_DEPRECATE
         .def("at", at)
         .def("add_file", add_file, arg("entry"))
         .def("__iter__", boost::python::range(&begin_files, &end_files))
@@ -196,7 +197,7 @@ void bind_create_torrent()
 
     class_<create_torrent>("create_torrent", no_init)
         .def(init<file_storage&>())
-        .def(init<torrent_info const&>(arg("ti")))
+        .def(init<torrent_info const&, bool>((arg("ti"), arg("use_preformatted") = false)))
         .def(init<file_storage&, int, int, int>((arg("storage"), arg("piece_size") = 0
             , arg("pad_file_limit") = -1, arg("flags") = int(libtorrent::create_torrent::optimize_alignment))))
 

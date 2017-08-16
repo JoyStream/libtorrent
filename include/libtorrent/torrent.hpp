@@ -588,7 +588,7 @@ namespace libtorrent
 		void set_download_limit(int limit);
 		int download_limit() const;
 
-		peer_class_t peer_class() const { return peer_class_t(m_peer_class); }
+		peer_class_t peer_class() const { return m_peer_class; }
 
 		void set_max_uploads(int limit, bool state_update = true);
 		int max_uploads() const { return m_max_uploads; }
@@ -770,7 +770,7 @@ namespace libtorrent
 		bool super_seeding() const
 		{
 			// we're not super seeding if we're not a seed
-			return m_super_seeding && is_seed();
+			return m_super_seeding;
 		}
 
 		void super_seeding(bool on);
@@ -1110,12 +1110,26 @@ namespace libtorrent
 		void inc_refcount(char const* purpose);
 		int refcount() const { return m_refcount; }
 
-		void inc_num_connecting()
-		{ ++m_num_connecting; }
-		void dec_num_connecting()
+		void inc_num_connecting(torrent_peer* pp)
+		{
+			++m_num_connecting;
+			TORRENT_ASSERT(m_num_connecting <= int(m_connections.size()));
+			if (pp->seed)
+			{
+				++m_num_connecting_seeds;
+				TORRENT_ASSERT(m_num_connecting_seeds <= int(m_connections.size()));
+			}
+		}
+		void dec_num_connecting(torrent_peer* pp)
 		{
 			TORRENT_ASSERT(m_num_connecting > 0);
 			--m_num_connecting;
+			if (pp->seed)
+			{
+				TORRENT_ASSERT(m_num_connecting_seeds > 0);
+				--m_num_connecting_seeds;
+			}
+			TORRENT_ASSERT(m_num_connecting <= int(m_connections.size()));
 		}
 
 		bool is_ssl_torrent() const { return m_ssl_torrent; }
@@ -1127,7 +1141,7 @@ namespace libtorrent
 		void set_ssl_cert_buffer(std::string const& certificate
 			, std::string const& private_key
 			, std::string const& dh_params);
-		boost::asio::ssl::context* ssl_ctx() const { return m_ssl_ctx.get(); } 
+		boost::asio::ssl::context* ssl_ctx() const { return m_ssl_ctx.get(); }
 #endif
 
 		int num_time_critical_pieces() const
@@ -1421,7 +1435,7 @@ namespace libtorrent
 
 		// for torrents who have a bandwidth limit, this is != 0
 		// and refers to a peer_class in the session.
-		boost::uint16_t m_peer_class;
+		peer_class_t m_peer_class;
 
 		// of all peers in m_connections, this is the number
 		// of peers that are outgoing and still waiting to
@@ -1646,6 +1660,10 @@ namespace libtorrent
 		// counting the peer connections that say true for is_seed()
 		boost::uint16_t m_num_seeds;
 
+		// this is the number of peers that are seeds, and count against
+		// m_num_seeds, but have not yet been connected
+		boost::uint16_t m_num_connecting_seeds;
+
 		// the timestamp of the last byte uploaded from this torrent specified in
 		// session_time. This is signed because it must be able to represent time
 		// before the session started.
@@ -1724,6 +1742,10 @@ namespace libtorrent
 
 		// set to true when torrent is start()ed. It may only be started once
 		bool m_was_started;
+
+		// this is set to true while we're looping over m_connections. We may not
+		// mutate the list while doing this
+		mutable int m_iterating_connections;
 #endif
 	};
 

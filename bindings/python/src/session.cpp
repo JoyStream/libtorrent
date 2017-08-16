@@ -9,13 +9,14 @@
 #include <libtorrent/error_code.hpp>
 #include <libtorrent/ip_filter.hpp>
 #include <libtorrent/disk_io_thread.hpp>
-#include <libtorrent/aux_/session_settings.hpp>
 #include <libtorrent/extensions.hpp>
 #include <libtorrent/bdecode.hpp>
 #include <libtorrent/bencode.hpp>
-#include <libtorrent/aux_/session_impl.hpp> // for settings_map()
 #include <libtorrent/torrent_info.hpp>
 #include <libtorrent/kademlia/item.hpp> // for sign_mutable_item
+#include <libtorrent/time.hpp>
+#include <libtorrent/session_stats.hpp>
+#include <libtorrent/session_status.hpp>
 
 #ifndef TORRENT_NO_DEPRECATE
 #include <libtorrent/extensions/lt_trackers.hpp>
@@ -50,7 +51,6 @@ namespace
         if (ec) throw libtorrent_exception(ec);
 #endif
     }
-#endif
 
     void outgoing_ports(lt::session& s, int _min, int _max)
     {
@@ -61,6 +61,8 @@ namespace
         s.apply_settings(p);
         return;
     }
+#endif // TORRENT_NO_DEPRECATE
+
 #ifndef TORRENT_DISABLE_DHT
     void add_dht_node(lt::session& s, tuple n)
     {
@@ -70,11 +72,13 @@ namespace
         s.add_dht_node(std::make_pair(ip, port));
     }
 
+#ifndef TORRENT_NO_DEPRECATE
     void add_dht_router(lt::session& s, std::string router_, int port_)
     {
         allow_threading_guard guard;
         return s.add_dht_router(std::make_pair(router_, port_));
     }
+#endif
 
 #endif // TORRENT_DISABLE_DHT
 
@@ -102,14 +106,17 @@ namespace
 
 	void make_settings_pack(lt::settings_pack& p, dict const& sett_dict)
 	{
-		list iterkeys = (list)sett_dict.keys();
-		int const len = boost::python::len(iterkeys);
-		for (int i = 0; i < len; i++)
+		stl_input_iterator<std::string> i(sett_dict.keys()), end;
+		for (; i != end; ++i)
 		{
-			std::string const key = extract<std::string>(iterkeys[i]);
+			std::string const key = *i;
 
 			int sett = setting_by_name(key);
-			if (sett < 0) continue;
+			if (sett < 0)
+			{
+				PyErr_SetString(PyExc_KeyError, ("unknown name in settings_pack: " + key).c_str());
+				throw_error_already_set();
+			}
 
 			TORRENT_TRY
 			{
@@ -129,6 +136,29 @@ namespace
 			}
 			TORRENT_CATCH(...) {}
 		}
+	}
+
+	dict make_dict(lt::settings_pack const& sett)
+	{
+		dict ret;
+		for (int i = settings_pack::string_type_base;
+			i < settings_pack::max_string_setting_internal; ++i)
+		{
+			ret[name_for_setting(i)] = sett.get_str(i);
+		}
+
+		for (int i = settings_pack::int_type_base;
+			i < settings_pack::max_int_setting_internal; ++i)
+		{
+			ret[name_for_setting(i)] = sett.get_int(i);
+		}
+
+		for (int i = settings_pack::bool_type_base;
+			i < settings_pack::max_bool_setting_internal; ++i)
+		{
+			ret[name_for_setting(i)] = sett.get_bool(i);
+		}
+		return ret;
 	}
 
 	boost::shared_ptr<lt::session> make_session(boost::python::dict sett, int flags)
@@ -172,25 +202,26 @@ namespace
 			allow_threading_guard guard;
 			sett = ses.get_settings();
 		}
-		dict ret;
-		for (int i = settings_pack::string_type_base;
-			i < settings_pack::max_string_setting_internal; ++i)
-		{
-			ret[name_for_setting(i)] = sett.get_str(i);
-		}
+		return make_dict(sett);
+	}
 
-		for (int i = settings_pack::int_type_base;
-			i < settings_pack::max_int_setting_internal; ++i)
-		{
-			ret[name_for_setting(i)] = sett.get_int(i);
-		}
+	dict min_memory_usage_wrapper()
+	{
+		settings_pack ret;
+		min_memory_usage(ret);
+		return make_dict(ret);
+	}
 
-		for (int i = settings_pack::bool_type_base;
-			i < settings_pack::max_bool_setting_internal; ++i)
-		{
-			ret[name_for_setting(i)] = sett.get_bool(i);
-		}
-		return ret;
+	dict default_settings_wrapper()
+	{
+		return make_dict(default_settings());
+	}
+
+	dict high_performance_seed_wrapper()
+	{
+		settings_pack ret;
+		high_performance_seed(ret);
+		return make_dict(ret);
 	}
 
 #ifndef BOOST_NO_EXCEPTIONS
@@ -458,6 +489,28 @@ namespace
        return ret;
     }
 
+    list cached_piece_info_list(std::vector<cached_piece_info> const& v)
+    {
+       list pieces;
+       lt::time_point now = lt::clock_type::now();
+       for (std::vector<cached_piece_info>::const_iterator i = v.begin()
+          , end(v.end()); i != end; ++i)
+       {
+          dict d;
+          d["piece"] = i->piece;
+          d["last_use"] = total_milliseconds(now - i->last_use) / 1000.f;
+          d["next_to_hash"] = i->next_to_hash;
+          d["kind"] = static_cast<int>(i->kind);
+          pieces.append(d);
+       }
+       return pieces;
+    }
+
+    list cache_status_pieces(cache_status const& cs)
+    {
+        return cached_piece_info_list(cs.pieces);
+    }
+
 #ifndef TORRENT_NO_DEPRECATE
     cache_status get_cache_status(lt::session& s)
     {
@@ -486,19 +539,7 @@ namespace
           ses.get_cache_info(ih, ret);
        }
 
-       list pieces;
-       ptime now = time_now();
-       for (std::vector<cached_piece_info>::iterator i = ret.begin()
-          , end(ret.end()); i != end; ++i)
-       {
-          dict d;
-          d["piece"] = i->piece;
-          d["last_use"] = total_milliseconds(now - i->last_use) / 1000.f;
-          d["next_to_hash"] = i->next_to_hash;
-          d["kind"] = i->kind;
-          pieces.append(d);
-       }
-       return pieces;
+       return cached_piece_info_list(ret);
     }
 #endif
 
@@ -720,6 +761,7 @@ void bind_session()
         .value("flag_stop_when_ready", add_torrent_params::flag_stop_when_ready)
     ;
     class_<cache_status>("cache_status")
+        .add_property("pieces", cache_status_pieces)
 #ifndef TORRENT_NO_DEPRECATE
         .def_readonly("blocks_written", &cache_status::blocks_written)
         .def_readonly("writes", &cache_status::writes)
@@ -770,18 +812,20 @@ void bind_session()
                 , arg("flags")=lt::session::start_default_features | lt::session::add_default_plugins
                 , arg("alert_mask")=int(alert::error_notification)))
         )
+        .def("outgoing_ports", &outgoing_ports)
 #endif
         .def("post_torrent_updates", allow_threads(&lt::session::post_torrent_updates), arg("flags") = 0xffffffff)
         .def("post_session_stats", allow_threads(&lt::session::post_session_stats))
-        .def("outgoing_ports", &outgoing_ports)
         .def("is_listening", allow_threads(&lt::session::is_listening))
         .def("listen_port", allow_threads(&lt::session::listen_port))
 #ifndef TORRENT_DISABLE_DHT
         .def("add_dht_node", &add_dht_node)
+#ifndef TORRENT_NO_DEPRECATE
         .def(
             "add_dht_router", &add_dht_router
           , (arg("router"), "port")
         )
+#endif // TORRENT_NO_DEPRECATE
         .def("is_dht_running", allow_threads(&lt::session::is_dht_running))
         .def("set_dht_settings", allow_threads(&lt::session::set_dht_settings))
         .def("get_dht_settings", allow_threads(&lt::session::get_dht_settings))
@@ -931,12 +975,6 @@ void bind_session()
         .def("set_settings", &set_feed_settings)
         .def("settings", &get_feed_settings)
     ;
-#endif
-
-    typedef void (*mem_preset2)(settings_pack& s);
-    typedef void (*perf_preset2)(settings_pack& s);
-
-#ifndef TORRENT_NO_DEPRECATE
 
     typedef session_settings (*mem_preset1)();
     typedef session_settings (*perf_preset1)();
@@ -946,8 +984,18 @@ void bind_session()
     scope().attr("create_metadata_plugin") = "metadata_transfer";
 #endif
 
-    def("high_performance_seed", (perf_preset2)high_performance_seed);
-    def("min_memory_usage", (mem_preset2)min_memory_usage);
+    def("high_performance_seed", high_performance_seed_wrapper);
+    def("min_memory_usage", min_memory_usage_wrapper);
+    def("default_settings", default_settings_wrapper);
+
+	class_<stats_metric>("stats_metric")
+		.def_readonly("name", &stats_metric::name)
+		.def_readonly("value_index", &stats_metric::value_index)
+		.def_readonly("type", &stats_metric::type)
+	;
+
+    def("session_stats_metrics", session_stats_metrics);
+    def("find_metric_idx", find_metric_idx);
 
     scope().attr("create_ut_metadata_plugin") = "ut_metadata";
     scope().attr("create_ut_pex_plugin") = "ut_pex";

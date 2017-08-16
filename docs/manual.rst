@@ -3,7 +3,7 @@ libtorrent API Documentation
 ============================
 
 :Author: Arvid Norberg, arvid@libtorrent.org
-:Version: 1.1.1
+:Version: 1.1.4
 
 .. contents:: Table of contents
   :depth: 1
@@ -46,8 +46,15 @@ For a description on how to create torrent files, see create_torrent.
 
 .. _make_torrent: make_torrent.html
 
-things to keep in mind
-======================
+forward declarations
+====================
+
+Forward declaring types from the libtorrent namespace is discouraged as it may
+break in future releases. Instead include ``libtorrent/fwd.hpp`` for forward
+declarations of all public types in libtorrent.
+
+trouble shooting
+================
 
 A common problem developers are facing is torrents stopping without explanation.
 Here is a description on which conditions libtorrent will stop your torrents,
@@ -55,7 +62,7 @@ how to find out about it and what to do about it.
 
 Make sure to keep track of the paused state, the error state and the upload
 mode of your torrents. By default, torrents are auto-managed, which means
-libtorrent will pause them, unpause them, scrape them and take them out
+libtorrent will pause, resume, scrape them and take them out
 of upload-mode automatically.
 
 Whenever a torrent encounters a fatal error, it will be stopped, and the
@@ -72,6 +79,11 @@ mode, trying to write things to the disk again. This means torrent will recover
 from certain disk errors if the problem is resolved. If the torrent is not
 auto managed, you have to call set_upload_mode() to turn
 downloading back on again.
+
+For a more detailed guide on how to trouble shoot performance issues, see
+troubleshooting_
+
+.. _troubleshooting: troubleshooting.html
 
 network primitives
 ==================
@@ -119,7 +131,7 @@ for system errors. That is, errors that belong to the generic or system category
 
 Errors that belong to the libtorrent error category are not localized however, they
 are only available in english. In order to translate libtorrent errors, compare the
-error category of the ``error_code`` object against ``libtorrent::get_libtorrent_category()``,
+error category of the ``error_code`` object against ``libtorrent::libtorrent_category()``,
 and if matches, you know the error code refers to the list above. You can provide
 your own mapping from error code to string, which is localized. In this case, you
 cannot rely on ``error_code::message()`` to generate your strings.
@@ -133,7 +145,7 @@ Here's a simple example of how to translate error codes:
 
 	std::string error_code_to_string(boost::system::error_code const& ec)
 	{
-		if (ec.category() != libtorrent::get_libtorrent_category())
+		if (ec.category() != libtorrent::libtorrent_category())
 		{
 			return ec.message();
 		}
@@ -173,6 +185,19 @@ download, without any .torrent file.
 The format of the magnet URI is:
 
 **magnet:?xt=urn:btih:** *Base16 encoded info-hash* [ **&dn=** *name of download* ] [ **&tr=** *tracker URL* ]*
+
+In order to download *just* the metadata (.torrent file) from a magnet link, set
+file priorities to 0 in add_torrent_params::file_priorities. It's OK to set the
+priority for more files than what is in the torrent. It may not be trivial to
+know how many files a torrent has before the metadata has been downloaded.
+Additional file priorities will be ignored. By setting a large number of files
+to priority 0, chances are that they will all be set to 0 once the metadata is
+received (and we know how many files there are).
+
+In this case, when the metadata is received from the swarm, the torrent will
+still be running, but it will disconnect the majority of peers (since connections
+to peers that already have the metadata are redundant). It will keep seeding the
+*metadata* only.
 
 queuing
 =======
@@ -251,8 +276,24 @@ Once a torrent completes checking and moves into a diffferent state, the next in
 line will be started for checking.
 
 Any torrent added force-started or force-stopped (i.e. the auto managed flag is
-_not_ set), will not be subject to this limit and they will all check
+*not* set), will not be subject to this limit and they will all check
 independently and in parallel.
+
+Once a torrent completes the checking of its files, or fastresume data, it will
+be put in the queue for downloading and potentially start downloading immediately.
+In order to add a torrent and check its files without starting the download, it
+can be added in ``stop_when_ready`` mode.
+See add_torrent_params::flag_stop_when_ready. This flag will stop the torrent
+once it is ready to start downloading.
+
+This is conceptually the same as waiting for the ``torrent_checked_alert`` and
+then call::
+
+	h.auto_managed(false);
+	h.pause();
+
+With the important distinction that it entirely avoids the brief window where
+the torrent is in downloading state.
 
 downloading queue
 -----------------
@@ -276,7 +317,7 @@ It limits the number of started seeds to settings_pack::active_seeds.
 
 On top of this basic bias, *seed priority* can be controller by specifying a
 seed ratio (the upload to download ratio), a seed-time ratio (the download
-time to seeding time ratio) and a seed-time (the abosulte time to be seeding a
+time to seeding time ratio) and a seed-time (the absolute time to be seeding a
 torrent). Until all those targets are hit, the torrent will be prioritized for
 seeding.
 
@@ -311,7 +352,7 @@ anything. If peers are allowed, torrents may:
 2. announce to the DHT
 3. announce to local peer discovery (local service discovery)
 
-Each of those actions are associated with a cost and hence may need a seprarate
+Each of those actions are associated with a cost and hence may need a separate
 limit. These limits are controlled by settings_pack::active_tracker_limit,
 settings_pack::active_dht_limit and settings_pack::active_lsd_limit
 respectively.
@@ -560,7 +601,7 @@ It will of course still check for existing pieces and fast resume data. The main
 drawbacks of this mode are:
 
  * It may take longer to start the torrent, since it will need to fill the files
-   with zeroes. This delay is linear to the size of the download.
+   with zeros. This delay is linear to the size of the download.
 
  * The download may occupy unnecessary disk space between download sessions.
 
@@ -794,7 +835,9 @@ rate limits.
 When the rate limits are adjusted for a specific torrent, a class is created
 implicitly for that torrent.
 
-The default peer class IDs are defined as enums in the ``session`` class::
+The default peer class IDs are defined as enums in the ``session`` class:
+
+.. code:: c++
 
 	enum {
 		global_peer_class_id,
@@ -814,6 +857,64 @@ Peer classes are configured with the set_peer_class() get_peer_class() calls.
 Custom peer classes can be assigned to torrents, with the ??? call, in which
 case all its peers will belong to the class. They can also be assigned based on
 the peer's IP address. See set_peer_class_filter() for more information.
+
+peer class examples
+-------------------
+
+Here are a few examples of common peer class operations.
+
+To make the global rate limit apply to local peers as well, update the IP-filter
+based peer class assignment:
+
+.. code:: c++
+
+		std::uint32_t const mask = 1 << lt::session::global_peer_class_id;
+		ip_filter f;
+
+		// for every IPv4 address, assign the global peer class
+		f.add_rule(address_v4::from_string("0.0.0.0")
+			, address_v4::from_string("255.255.255.255")
+			, mask);
+
+		// for every IPv6 address, assign the global peer class
+		f.add_rule(address_v6::from_string("::")
+			, address_v6::from_string("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+			, mask);
+		ses.set_peer_class_filter(f);
+
+To make uTP sockets exempt from rate limiting:
+
+.. code:: c++
+
+	peer_class_type_filter flt;
+	// filter out the global and local peer class for uTP sockets, if these
+	// classes are set by the IP filter
+	flt.disallow(peer_class_type_filter::utp_socket, session::global_peer_class_id);
+	flt.disallow(peer_class_type_filter::utp_socket, session::local_peer_class_id);
+
+	// this filter should not add the global or local peer class to utp sockets
+	flt.remove(peer_class_type_filter::utp_socket, session::global_peer_class_id);
+	flt.remove(peer_class_type_filter::utp_socket, session::local_peer_class_id);
+
+	ses.set_peer_class_type_filter(flt);
+
+To make all peers on the internal network unthrottled:
+
+.. code:: c++
+
+		std::uint32_t const mask = 1 << lt::session::global_peer_class_id;
+		ip_filter f;
+
+		// for every IPv4 address, assign the global peer class
+		f.add_rule(address_v4::from_string("0.0.0.0")
+			, address_v4::from_string("255.255.255.255")
+			, mask);
+
+		// for every address on the local metwork, set the mastk to 0
+		f.add_rule(address_v4::from_string("10.0.0.0")
+			, address_v4::from_string("10.255.255.255")
+			, 0);
+		ses.set_peer_class_filter(f);
 
 SSL torrents
 ============
